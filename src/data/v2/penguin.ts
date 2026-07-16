@@ -1,0 +1,92 @@
+import { Model } from '../types';
+
+export const penguinV2: Model = {
+  id: 'penguin-1',
+  name: '企鹅',
+  theme: 'animal',
+  difficulty: 'easy',
+  ageRange: '3-4岁',
+  minAge: 3,
+  maxAge: 4,
+  estimatedTime: '15分钟',
+  coverImage: '',
+  description: '用黑白磁力片搭建一只可爱的小企鹅，学习颜色对比和形状组合。',
+  buildMode: 'flat',
+  parts: [
+    { id: 'p1', name: '黑色长方形磁力片', color: 'black', count: 1, shape: 'rectangle' },
+    { id: 'p2', name: '黑色等边三角形磁力片', color: 'black', count: 3, shape: 'equilateral-triangle' },
+    { id: 'p3', name: '黑色正方形磁力片', color: 'black', count: 1, shape: 'square' },
+    { id: 'p4', name: '黄色等边三角形磁力片', color: 'yellow', count: 1, shape: 'equilateral-triangle' },
+    { id: 'p5', name: '橙色等边三角形磁力片', color: 'orange', count: 2, shape: 'equilateral-triangle' },
+  ],
+  pieces: [
+    { id: 'body-bottom', partId: 'p2', isRoot: true },
+    { id: 'body-mid', partId: 'p1' },
+    { id: 'wing-l', partId: 'p2' },
+    { id: 'wing-r', partId: 'p2' },
+    { id: 'head', partId: 'p3' },
+    { id: 'beak', partId: 'p4' },
+    { id: 'foot-l', partId: 'p5' },
+    { id: 'foot-r', partId: 'p5' },
+  ],
+  connections: [
+    { pieceA: 'body-bottom', portA: 'e1-p0', pieceB: 'body-mid', portB: 'e1-p0', dihedralDeg: 0 },
+    { pieceA: 'body-mid', portA: 'e3-p0', pieceB: 'head', portB: 'e0-p0', dihedralDeg: 0, flip: true },
+    { pieceA: 'head', portA: 'e2-p0', pieceB: 'beak', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+    { pieceA: 'body-mid', portA: 'e2-p1', pieceB: 'wing-l', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+    { pieceA: 'body-mid', portA: 'e0-p0', pieceB: 'wing-r', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+    { pieceA: 'body-mid', portA: 'e2-p0', pieceB: 'foot-l', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+    { pieceA: 'body-mid', portA: 'e0-p1', pieceB: 'foot-r', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+  ],
+  steps: [
+    {
+      id: 1,
+      title: '做身体',
+      description: '用黑色长方形和三角形磁力片拼成企鹅梨形的身体。',
+      parentGuide: '请告诉小朋友：企鹅的身体胖胖的，下面圆圆的，像一个大大的梨！',
+      addedPieceIds: ['body-bottom', 'body-mid'],
+      addedConnections: [
+        { pieceA: 'body-bottom', portA: 'e1-p0', pieceB: 'body-mid', portB: 'e1-p0', dihedralDeg: 0 },
+      ],
+    },
+    {
+      id: 2,
+      title: '加翅膀',
+      description: '在身体两侧加上黑色三角形翅膀。',
+      parentGuide: '请和小朋友一起：企鹅的翅膀像船桨，帮它在水里游泳！左右各一个，不要搞反哦~',
+      addedPieceIds: ['wing-l', 'wing-r'],
+      addedConnections: [
+        { pieceA: 'body-mid', portA: 'e2-p1', pieceB: 'wing-l', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+        { pieceA: 'body-mid', portA: 'e0-p0', pieceB: 'wing-r', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+      ],
+    },
+    {
+      id: 3,
+      title: '加头',
+      description: '用黑色正方形磁力片做企鹅的头。',
+      parentGuide: '请鼓励小朋友：企鹅的头圆圆的，眼睛亮亮的，真精神！',
+      addedPieceIds: ['head'],
+      addedConnections: [
+        { pieceA: 'body-mid', portA: 'e3-p0', pieceB: 'head', portB: 'e0-p0', dihedralDeg: 0, flip: true },
+      ],
+    },
+    {
+      id: 4,
+      title: '加嘴和脚',
+      description: '加上黄色的嘴巴和橙色的小脚丫。',
+      parentGuide: '请告诉小朋友：企鹅的嘴巴尖尖的，脚掌橘橘的，走路一摇一摆真有趣！',
+      addedPieceIds: ['beak', 'foot-l', 'foot-r'],
+      addedConnections: [
+        { pieceA: 'head', portA: 'e2-p0', pieceB: 'beak', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+        { pieceA: 'body-mid', portA: 'e2-p0', pieceB: 'foot-l', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+        { pieceA: 'body-mid', portA: 'e0-p1', pieceB: 'foot-r', portB: 'e1-p0', dihedralDeg: 0, flip: true },
+      ],
+    },
+  ],
+  skills: ['颜色对比', '形状认知', '观察力'],
+  parentTips: [
+    '给孩子讲南极的故事',
+    '引导孩子模仿企鹅走路的样子',
+    '教孩子认识黑白两种颜色',
+  ],
+};

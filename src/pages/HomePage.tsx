@@ -1,5 +1,5 @@
-import { useNavigate } from 'react-router-dom';
-import { Sparkles, Home, Car, Rocket, Cat, Castle, Grid3X3 } from 'lucide-react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { Sparkles, Home, Car, Rocket, Cat, Castle, Grid3X3, BookOpen, LayoutGrid } from 'lucide-react';
 import { models, difficultyLabels, difficultyColors } from '../data/models';
 
 const themes = [
@@ -18,7 +18,8 @@ const difficulties = [
 
 export function HomePage() {
   const navigate = useNavigate();
-  const featuredModel = models[2];
+  const location = useLocation();
+  const featuredModel = models.find(m => m.id === 'house-1') || models[0];
 
   const handleThemeClick = (theme: string) => {
     navigate(`/list?theme=${theme}`);
@@ -33,8 +34,8 @@ export function HomePage() {
   };
 
   return (
-    <div className="container">
-      <header className="safe-area-top gradient-bg">
+    <div className="container h-screen flex flex-col">
+      <header className="safe-area-top gradient-bg flex-shrink-0">
         <div className="px-4 pt-6 pb-8">
           <div className="flex items-center gap-2 mb-2">
             <Sparkles className="w-6 h-6 text-primary-500" />
@@ -44,7 +45,7 @@ export function HomePage() {
         </div>
       </header>
 
-      <main className="px-4 -mt-6 pb-8 safe-area-bottom">
+      <main className="px-4 -mt-6 pb-24 overflow-y-auto flex-1">
         <section className="bg-white rounded-2xl card-shadow overflow-hidden mb-6">
           <div className="relative">
             <img
@@ -56,7 +57,7 @@ export function HomePage() {
             <div className="absolute bottom-4 left-4 right-4 text-white">
               <div className="flex items-center gap-2 mb-1">
                 <span className="bg-white/90 text-xs font-medium px-2 py-0.5 rounded-full text-gray-700">
-                  今日推荐
+                  精选推荐
                 </span>
                 <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${difficultyColors[featuredModel.difficulty]}`}>
                   {difficultyLabels[featuredModel.difficulty]}
@@ -130,10 +131,10 @@ export function HomePage() {
           </div>
           <div className="flex gap-3 overflow-x-auto pb-2 -mx-4 px-4 scrollbar-hide">
             {models.slice(0, 4).map((model) => (
-              <div
+              <Link
                 key={model.id}
-                onClick={() => navigate(`/model/${model.id}`)}
-                className="flex-shrink-0 w-32 bg-white rounded-xl card-shadow overflow-hidden cursor-pointer transform transition-all duration-200 hover:scale-[1.02]"
+                to={`/model/${model.id}`}
+                className="flex-shrink-0 w-32 bg-white rounded-xl card-shadow overflow-hidden transform transition-all duration-200 hover:scale-[1.02] focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2"
               >
                 <div className="aspect-square">
                   <img
@@ -148,8 +149,26 @@ export function HomePage() {
                     {difficultyLabels[model.difficulty]}
                   </span>
                 </div>
-              </div>
+              </Link>
             ))}
+          </div>
+        </section>
+
+        <section className="mb-6">
+          <div className="bg-gradient-to-r from-primary-500 to-orange-400 rounded-2xl p-4 text-white">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-bold text-lg">磁力片学堂</h4>
+                <p className="text-sm opacity-90 mt-1">从入门到进阶，轻松掌握搭建技巧</p>
+              </div>
+              <button
+                onClick={() => navigate('/learn')}
+                className="bg-white/20 backdrop-blur-sm px-4 py-2 rounded-xl text-sm font-medium flex items-center gap-1 hover:bg-white/30 transition-colors"
+              >
+                <BookOpen className="w-4 h-4" />
+                开始学习
+              </button>
+            </div>
           </div>
         </section>
 
@@ -167,6 +186,41 @@ export function HomePage() {
           </div>
         </section>
       </main>
+
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 safe-area-bottom z-50">
+        <div className="max-w-md mx-auto flex items-center justify-around py-2">
+          <button
+            onClick={() => navigate('/')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname === '/' ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname === '/' ? 'page' : undefined}
+          >
+            <Home className="w-6 h-6" />
+            <span className="text-xs font-medium">首页</span>
+          </button>
+          <button
+            onClick={() => navigate('/learn')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname.startsWith('/learn') ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname.startsWith('/learn') ? 'page' : undefined}
+          >
+            <BookOpen className="w-6 h-6" />
+            <span className="text-xs font-medium">学堂</span>
+          </button>
+          <button
+            onClick={() => navigate('/list')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname === '/list' ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname === '/list' ? 'page' : undefined}
+          >
+            <LayoutGrid className="w-6 h-6" />
+            <span className="text-xs font-medium">作品</span>
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }

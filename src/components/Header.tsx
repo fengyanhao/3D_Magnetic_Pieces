@@ -26,7 +26,8 @@ export function Header({ title, showBack = true }: HeaderProps) {
           {showBack && location.pathname !== '/' && (
             <button
               onClick={handleBack}
-              className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+              className="p-2 rounded-full hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
+              aria-label="返回上一页"
             >
               <ArrowLeft className="w-6 h-6 text-gray-600" />
             </button>
@@ -35,7 +36,8 @@ export function Header({ title, showBack = true }: HeaderProps) {
         </div>
         <button
           onClick={handleHome}
-          className="p-2 rounded-full hover:bg-gray-100 transition-colors"
+          className="p-2 rounded-full hover:bg-gray-100 transition-colors focus:outline-none focus:ring-2 focus:ring-primary-500"
+          aria-label="返回首页"
         >
           <Home className="w-5 h-5 text-gray-500" />
         </button>

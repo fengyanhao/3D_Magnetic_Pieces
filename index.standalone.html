@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#f97316" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="description" content="亲子磁力片搭建教程 v2.2 离线体验版" />
+    <title>亲子磁力片 - 离线体验版</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='20' y='30' width='60' height='50' rx='6' fill='%23FF6B6B' opacity='0.8'/%3E%3Cpolygon points='15,30 50,5 85,30' fill='%234ECDC4' opacity='0.8'/%3E%3C/svg%3E" />
+    <style>
+      /* standalone 启动阶段等待 React 挂载时的占位 */
+      html, body, #root { height: 100%; margin: 0; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%);
+        color: #1f2937;
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-direction: column;
+        gap: 16px;
+        background: linear-gradient(135deg, #FFF7ED 0%, #FFEDD5 100%);
+        z-index: 9999;
+        transition: opacity 0.3s ease;
+      }
+      #boot-splash.hidden { opacity: 0; pointer-events: none; }
+      .boot-title { font-size: 22px; font-weight: 700; color: #ea580c; }
+      .boot-sub { font-size: 14px; color: #6b7280; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <div id="boot-splash">
+      <div class="boot-title">亲子磁力片</div>
+      <div class="boot-sub">正在加载离线体验版…</div>
+    </div>
+    <script type="module" src="/src/main.standalone.tsx"></script>
+  </body>
+</html>

@@ -1,13 +1,50 @@
-import { useParams, useNavigate } from 'react-router-dom';
-import { Users, Clock, Star, Target, Lightbulb, ChevronRight, Package } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Users, Clock, Star, Target, Lightbulb, ChevronRight, Package, Heart, Home, BookOpen, LayoutGrid } from 'lucide-react';
 import { Header } from '../components/Header';
 import { MagnetScene } from '../components/MagnetScene';
+import { safeStorage } from '../utils/standalone';
 import { models, themeLabels, difficultyLabels, difficultyColors, shapeLabels, magnetColorMap } from '../data/models';
+
+interface TutorialProgress {
+  modelId: string;
+  currentStep: number;
+  completedAt?: string;
+}
 
 export function ModelDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const model = models.find((m) => m.id === id);
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [progress, setProgress] = useState<TutorialProgress | null>(null);
+
+  useEffect(() => {
+    const favs = safeStorage.getItem('favorites');
+    const favorites = favs ? JSON.parse(favs) : [];
+    setIsFavorite(favorites.includes(id));
+
+    const savedProgress = safeStorage.getItem(`tutorial_progress_${id}`);
+    if (savedProgress) {
+      setProgress(JSON.parse(savedProgress));
+    }
+  }, [id]);
+
+  const toggleFavorite = () => {
+    const favs = safeStorage.getItem('favorites');
+    const favorites = favs ? JSON.parse(favs) : [];
+    
+    if (isFavorite) {
+      const newFavs = favorites.filter((f: string) => f !== id);
+      safeStorage.setItem('favorites', JSON.stringify(newFavs));
+      setIsFavorite(false);
+    } else {
+      favorites.push(id);
+      safeStorage.setItem('favorites', JSON.stringify(favorites));
+      setIsFavorite(true);
+    }
+  };
 
   if (!model) {
     return (
@@ -26,11 +63,13 @@ export function ModelDetailPage() {
     );
   }
 
+  const hasProgress = progress && progress.currentStep < model.steps.length - 1;
+
   return (
-    <div className="container">
+    <div className="container h-screen flex flex-col">
       <Header title="模型详情" />
 
-      <main className="pb-8 safe-area-bottom">
+      <main className="flex-1 overflow-y-auto pb-24">
         <div className="relative h-64">
           <MagnetScene
             model={model}
@@ -46,8 +85,17 @@ export function ModelDetailPage() {
                 {difficultyLabels[model.difficulty]}
               </span>
             </div>
+            <button
+              onClick={toggleFavorite}
+              className={`w-10 h-10 rounded-full flex items-center justify-center transition-all ${
+                isFavorite ? 'bg-red-500 text-white' : 'bg-white/90 backdrop-blur-sm text-gray-400 hover:text-red-500'
+              }`}
+              aria-label={isFavorite ? '取消收藏' : '收藏'}
+            >
+              <Heart className={`w-5 h-5 ${isFavorite ? 'fill-current' : ''}`} />
+            </button>
           </div>
-          <div className="absolute bottom-4 left-4 right-4">
+          <div className="absolute bottom-12 left-4 right-4">
             <h1 className="text-2xl font-bold text-gray-800 drop-shadow-sm">{model.name}</h1>
           </div>
         </div>
@@ -139,27 +187,81 @@ export function ModelDetailPage() {
             <h4 className="text-sm font-medium text-gray-700 mb-2">搭建步骤预览</h4>
             <div className="flex gap-2">
               {model.steps.map((step, index) => (
-                <div
+                <button
                   key={step.id}
-                  className="flex-shrink-0 w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center"
+                  onClick={() => navigate(`/tutorial/${model.id}?step=${index}`)}
+                  className={`flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center transition-all ${
+                    index <= (progress?.currentStep ?? -1)
+                      ? 'bg-green-100 text-green-600'
+                      : 'bg-primary-100 text-primary-600'
+                  }`}
+                  aria-label={`跳转到第${index + 1}步`}
                 >
-                  <span className="text-primary-600 font-bold">{index + 1}</span>
-                </div>
+                  <span className="font-bold">{index + 1}</span>
+                </button>
               ))}
             </div>
           </div>
         </div>
 
         <div className="px-4 pt-4">
+          {hasProgress ? (
+            <button
+              onClick={() => navigate(`/tutorial/${model.id}?step=${progress?.currentStep ?? 0}`)}
+              className="btn-primary w-full flex items-center justify-center gap-2 mb-3"
+            >
+              继续第{progress?.currentStep && progress.currentStep + 1}步
+              <ChevronRight className="w-5 h-5" />
+            </button>
+          ) : null}
           <button
             onClick={() => navigate(`/tutorial/${model.id}`)}
-            className="btn-primary w-full flex items-center justify-center gap-2"
+            className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all ${
+              hasProgress 
+                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200' 
+                : 'btn-primary'
+            }`}
           >
-            开始搭建
+            {hasProgress ? '重新开始' : '开始搭建'}
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
       </main>
+
+      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 safe-area-bottom z-50">
+        <div className="max-w-md mx-auto flex items-center justify-around py-2">
+          <button
+            onClick={() => navigate('/')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname === '/' ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname === '/' ? 'page' : undefined}
+          >
+            <Home className="w-6 h-6" />
+            <span className="text-xs font-medium">首页</span>
+          </button>
+          <button
+            onClick={() => navigate('/learn')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname.startsWith('/learn') ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname.startsWith('/learn') ? 'page' : undefined}
+          >
+            <BookOpen className="w-6 h-6" />
+            <span className="text-xs font-medium">学堂</span>
+          </button>
+          <button
+            onClick={() => navigate('/list')}
+            className={`flex flex-col items-center gap-1 px-6 py-2 rounded-xl transition-all ${
+              location.pathname === '/list' ? 'text-primary-500' : 'text-gray-400 hover:text-gray-600'
+            }`}
+            aria-current={location.pathname === '/list' ? 'page' : undefined}
+          >
+            <LayoutGrid className="w-6 h-6" />
+            <span className="text-xs font-medium">作品</span>
+          </button>
+        </div>
+      </nav>
     </div>
   );
 }

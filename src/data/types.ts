@@ -5,11 +5,14 @@ export type MagnetShape =
   | 'square'
   | 'equilateral-triangle'
   | 'isosceles-triangle'
+  | 'right-triangle'
+  | 'long-right-triangle'
   | 'rectangle'
   | 'rhombus'
   | 'trapezoid'
   | 'hexagon'
   | 'sector'
+  | 'semicircle'
   | 'pentagon';
 
 export type MagnetColor =
@@ -45,13 +48,34 @@ export interface MagnetPiece {
   rotation: [number, number, number];
 }
 
+/** v2 新格式：连接关系定义 */
+export interface ConnectionDef {
+  pieceA: string;
+  portA: string;
+  pieceB: string;
+  portB: string;
+  dihedralDeg: number;
+  flip?: boolean;
+}
+
+/** v2 新格式：零件实例引用 */
+export interface PieceRef {
+  id: string;
+  partId: string;
+  isRoot?: boolean;
+}
+
 export interface Step {
   id: number;
   title: string;
   description: string;
   parentGuide: string;
-  /** 本步骤新增的磁力片实例 */
-  addedPieces: MagnetPiece[];
+  /** 本步骤新增的磁力片实例（旧格式） */
+  addedPieces?: MagnetPiece[];
+  /** v2 新格式：本步骤新增的零件 ID */
+  addedPieceIds?: string[];
+  /** v2 新格式：本步骤新增的连接 */
+  addedConnections?: ConnectionDef[];
 }
 
 export interface Model {
@@ -60,6 +84,8 @@ export interface Model {
   theme: Theme;
   difficulty: Difficulty;
   ageRange: string;
+  minAge: number;
+  maxAge: number;
   estimatedTime: string;
   coverImage: string;
   description: string;
@@ -67,6 +93,12 @@ export interface Model {
   skills: string[];
   parentTips: string[];
   steps: Step[];
+  /** v2 新格式：构建模式 */
+  buildMode?: 'flat' | 'standing' | 'solid';
+  /** v2 新格式：零件实例列表 */
+  pieces?: PieceRef[];
+  /** v2 新格式：连接关系列表 */
+  connections?: ConnectionDef[];
 }
 
 export interface FilterOptions {

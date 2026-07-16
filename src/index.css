@@ -12,6 +12,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background-color: #fdfcfb;
+  -webkit-text-size-adjust: 100%;
 }
 
 .container {
@@ -56,4 +57,30 @@ body {
 
 .animate-pop-in {
   animation: pop-in 0.5s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  
+  .animate-bounce {
+    animation: none;
+  }
+  
+  .motion-safe\:animate-bounce {
+    animation: none;
+  }
+  
+  .active\:scale-95:active {
+    transform: none;
+  }
+  
+  .hover\:scale-[1.02]:hover {
+    transform: none;
+  }
 }
