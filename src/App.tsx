@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, lazy, Suspense } from 'react';
 import { HashRouter, BrowserRouter, Routes, Route } from 'react-router-dom';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -15,6 +15,9 @@ import { StructuresPage } from './pages/StructuresPage';
 import { SafetyPage } from './pages/SafetyPage';
 import { shouldUseHashRouter } from './utils/standalone';
 
+// 编辑器懒加载:首页首屏不会加载编辑器及其依赖(@react-three/fiber 等)。
+const EditorPage = lazy(() => import('./pages/EditorPage').then((m) => ({ default: m.EditorPage })));
+
 function AppRoutes() {
   return (
     <Routes>
@@ -29,6 +32,14 @@ function AppRoutes() {
       <Route path="/learn/structures" element={<StructuresPage />} />
       <Route path="/learn/structures/:structureId" element={<StructuresPage />} />
       <Route path="/learn/safety" element={<SafetyPage />} />
+      <Route
+        path="/editor"
+        element={
+          <Suspense fallback={<div className="flex items-center justify-center h-screen text-gray-500">正在加载编辑器…</div>}>
+            <EditorPage />
+          </Suspense>
+        }
+      />
       <Route path="*" element={<NotFoundPage />} />
     </Routes>
   );

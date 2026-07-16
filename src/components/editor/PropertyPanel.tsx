@@ -1,0 +1,496 @@
+import { useState } from 'react';
+import { EditorProject } from '../../editor/types';
+import { EditorValidationResult, categoryLabels, suggestFix, EditorValidationIssue } from '../../editor/validate';
+import { buildMaterialInventory } from '../../editor/serialization';
+import { ALL_COLORS, colorLabels } from '../../editor/shapeInfo';
+import { MagnetColor, Theme, Difficulty } from '../../data/types';
+import type { Selection } from './EditorWorkspace';
+
+interface Props {
+  project: EditorProject;
+  selection: Selection;
+  validation: EditorValidationResult | null;
+  currentStepId: number | null;
+  onSetPieceColor: (pieceId: string, color: MagnetColor) => void;
+  onDuplicatePiece: () => void;
+  onDeleteSelected: () => void;
+  onUpdateConnection: (index: number, patch: { dihedralDeg?: number; flip?: boolean }) => void;
+  onRemoveConnection: (index: number) => void;
+  onUpdateMetadata: (patch: Partial<EditorProject['metadata']>) => void;
+  onFocusError: (target: { pieceId?: string; connectionIndex?: number }) => void;
+  onSaveCameraPreset: (preset: { label: string; position: [number, number, number]; target: [number, number, number]; zoom: number; stepId?: number }) => void;
+  onAddPieceToStep: (stepId: number, pieceId: string) => void;
+  onUpdateStep: (stepId: number, patch: any) => void;
+}
+
+export function PropertyPanel(props: Props) {
+  const { project, validation } = props;
+  const [tab, setTab] = useState<'props' | 'validation' | 'info'>('props');
+
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex border-b">
+        <TabBtn active={tab === 'props'} onClick={() => setTab('props')}>属性</TabBtn>
+        <TabBtn active={tab === 'validation'} onClick={() => setTab('validation')}>
+          校验{validation && validation.errorCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[10px]">{validation.errorCount}</span>
+          )}
+        </TabBtn>
+        <TabBtn active={tab === 'info'} onClick={() => setTab('info')}>方案信息</TabBtn>
+      </div>
+
+      <div className="flex-1 overflow-y-auto">
+        {tab === 'props' && <PropsTab {...props} />}
+        {tab === 'validation' && <ValidationTab {...props} />}
+        {tab === 'info' && <InfoTab project={project} onUpdateMetadata={props.onUpdateMetadata} />}
+      </div>
+    </div>
+  );
+}
+
+function TabBtn({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 py-2 text-xs font-medium border-b-2 transition-colors ${
+        active ? 'border-blue-500 text-blue-600 bg-blue-50'
+        : 'border-transparent text-gray-500 hover:bg-gray-50'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+/* ----------------- 属性 Tab ----------------- */
+function PropsTab(props: Props) {
+  const { project, selection } = props;
+
+  if (selection.kind === 'none') {
+    return (
+      <div className="p-4 space-y-3">
+        <p className="text-xs text-gray-400">未选中对象。点击 3D 画布中的零件或下方步骤来编辑。</p>
+        <MaterialList project={project} />
+      </div>
+    );
+  }
+
+  if (selection.kind === 'piece') {
+    return <PieceProps {...props} />;
+  }
+
+  if (selection.kind === 'connection') {
+    return <ConnectionProps {...props} />;
+  }
+
+  return <StepProps {...props} />;
+}
+
+function MaterialList({ project }: { project: EditorProject }) {
+  const inv = buildMaterialInventory(project);
+  if (inv.length === 0) return <p className="text-xs text-gray-400">暂无零件</p>;
+  return (
+    <div>
+      <h3 className="text-xs font-semibold text-gray-700 mb-1">材料清单(自动生成)</h3>
+      <ul className="text-xs space-y-0.5">
+        {inv.map((i) => (
+          <li key={`${i.shape}:${i.color}`} className="flex justify-between">
+            <span>{i.name} · {colorLabels[i.color as MagnetColor] ?? i.color}</span>
+            <span className="text-gray-500">×{i.count}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PieceProps(props: Props) {
+  const { project, selection, onSetPieceColor, onDuplicatePiece, onDeleteSelected, onAddPieceToStep, currentStepId } = props;
+  const piece = project.pieces.find((p) => p.id === (selection as any).id);
+  if (!piece) return <p className="text-xs text-gray-400 p-4">零件不存在</p>;
+  const part = project.parts.find((p) => p.id === piece.partId);
+  if (!part) return <p className="text-xs text-red-500 p-4">partId 悬空: {piece.partId}</p>;
+  const shape = part.shape;
+  const tf = project.transforms[piece.id];
+
+  return (
+    <div className="p-3 space-y-3">
+      <div>
+        <div className="text-xs text-gray-500">ID</div>
+        <div className="text-xs font-mono text-gray-700 break-all">{piece.id}</div>
+      </div>
+      <div>
+        <div className="text-xs text-gray-500">形状</div>
+        <div className="text-xs text-gray-700">{shape}</div>
+      </div>
+      <div>
+        <div className="text-xs text-gray-500">颜色</div>
+        <div className="grid grid-cols-6 gap-1 mt-1">
+          {ALL_COLORS.map((c) => (
+            <button
+              key={c}
+              onClick={() => onSetPieceColor(piece.id, c)}
+              className={`w-7 h-7 rounded border-2 ${part.color === c ? 'border-blue-500' : 'border-gray-200'}`}
+              style={{ background: colorSwatch(c) }}
+              title={colorLabels[c]}
+            />
+          ))}
+        </div>
+      </div>
+      {tf && (
+        <div>
+          <div className="text-xs text-gray-500">位置(自由编辑,非吸附)</div>
+          <div className="text-[10px] font-mono text-gray-700 mt-0.5">
+            ({tf.position[0].toFixed(2)}, {tf.position[1].toFixed(2)}, {tf.position[2].toFixed(2)})
+          </div>
+          <div className="text-[10px] text-gray-400 mt-0.5">WASDQE 移动 · Shift 大步</div>
+        </div>
+      )}
+      <div className="text-xs">
+        <span className="text-gray-500">根零件:</span>
+        <span className="ml-1">{piece.isRoot ? '是' : '否'}</span>
+      </div>
+      <div className="flex gap-2 pt-2 border-t">
+        <button onClick={onDuplicatePiece} className="text-xs px-2 py-1 border rounded hover:bg-gray-50">复制</button>
+        <button onClick={onDeleteSelected} className="text-xs px-2 py-1 border border-red-300 text-red-600 rounded hover:bg-red-50">删除</button>
+      </div>
+
+      {currentStepId !== null && (
+        <div className="pt-2 border-t">
+          <button
+            onClick={() => onAddPieceToStep(currentStepId, piece.id)}
+            className="text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600"
+          >
+            加入当前步骤 #{currentStepId}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConnectionProps(props: Props) {
+  const { project, selection, onUpdateConnection, onRemoveConnection } = props;
+  const idx = (selection as any).index as number;
+  const conn = project.connections[idx];
+  if (!conn) return <p className="text-xs text-gray-400 p-4">连接不存在</p>;
+
+  return (
+    <div className="p-3 space-y-3">
+      <div className="text-xs text-gray-500">连接 #{idx}</div>
+      <div className="text-[10px] font-mono text-gray-600 break-all">
+        {conn.pieceA}:{conn.portA} → {conn.pieceB}:{conn.portB}
+      </div>
+      <div>
+        <label className="text-xs text-gray-500">二面角(deg): {conn.dihedralDeg}</label>
+        <input
+          type="range"
+          min={-180}
+          max={180}
+          step={5}
+          value={conn.dihedralDeg}
+          onChange={(e) => onUpdateConnection(idx, { dihedralDeg: Number(e.target.value) })}
+          className="w-full"
+        />
+        <div className="flex gap-1 mt-1">
+          {[0, 45, 90, -90, 135, 180].map((d) => (
+            <button
+              key={d}
+              onClick={() => onUpdateConnection(idx, { dihedralDeg: d })}
+              className="text-[10px] px-1 border rounded hover:bg-gray-50"
+            >{d}°</button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <label className="text-xs text-gray-500">flip(翻转方向)</label>
+        <button
+          onClick={() => onUpdateConnection(idx, { flip: !conn.flip })}
+          className={`ml-2 text-xs px-2 py-0.5 rounded ${conn.flip ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
+        >
+          {conn.flip ? 'ON' : 'OFF'}
+        </button>
+      </div>
+      <div className="pt-2 border-t">
+        <button
+          onClick={() => onRemoveConnection(idx)}
+          className="text-xs px-2 py-1 border border-red-300 text-red-600 rounded hover:bg-red-50"
+        >
+          断开连接
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function StepProps(props: Props) {
+  const { project, selection, onUpdateStep } = props;
+  const stepId = (selection as any).id as number;
+  const step = project.steps.find((s) => s.id === stepId);
+  if (!step) return <p className="text-xs text-gray-400 p-4">步骤不存在</p>;
+
+  return (
+    <div className="p-3 space-y-3">
+      <div>
+        <label className="text-xs text-gray-500">标题</label>
+        <input
+          type="text"
+          value={step.title}
+          onChange={(e) => onUpdateStep(stepId, { title: e.target.value })}
+          className="w-full mt-0.5 px-2 py-1 text-sm border rounded"
+          placeholder="必须填写标题"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-gray-500">教学说明</label>
+        <textarea
+          value={step.description}
+          onChange={(e) => onUpdateStep(stepId, { description: e.target.value })}
+          className="w-full mt-0.5 px-2 py-1 text-sm border rounded"
+          rows={3}
+          placeholder="描述本步骤的操作要点"
+        />
+      </div>
+      <div>
+        <label className="text-xs text-gray-500">家长引导</label>
+        <input
+          type="text"
+          value={step.parentGuide}
+          onChange={(e) => onUpdateStep(stepId, { parentGuide: e.target.value })}
+          className="w-full mt-0.5 px-2 py-1 text-sm border rounded"
+        />
+      </div>
+      <div>
+        <div className="text-xs text-gray-500">本步骤新增零件 ({step.addedPieceIds.length})</div>
+        <ul className="text-[10px] mt-1 space-y-0.5">
+          {step.addedPieceIds.length === 0 ? (
+            <li className="text-gray-400">无。选中零件后点"加入当前步骤"。</li>
+          ) : step.addedPieceIds.map((pid) => (
+            <li key={pid} className="font-mono text-gray-700">{pid}</li>
+          ))}
+        </ul>
+      </div>
+      <div>
+        <div className="text-xs text-gray-500">本步骤新增连接 ({step.addedConnections.length})</div>
+        <ul className="text-[10px] mt-1 space-y-0.5">
+          {step.addedConnections.map((c, i) => (
+            <li key={i} className="font-mono text-gray-700">{c.pieceA}:{c.portA}→{c.pieceB}:{c.portB}</li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+/* ----------------- 校验 Tab ----------------- */
+function ValidationTab(props: Props) {
+  const { validation, onFocusError } = props;
+  if (!validation) return <p className="text-xs text-gray-400 p-4">校验中…</p>;
+  if (validation.solverError) {
+    return <p className="text-xs text-red-600 p-4">{validation.solverError}</p>;
+  }
+  if (validation.issues.length === 0) {
+    return (
+      <div className="p-4 text-center">
+        <div className="text-green-500 text-3xl mb-2">✓</div>
+        <p className="text-xs text-gray-700">校验通过</p>
+      </div>
+    );
+  }
+
+  // 按类别分组
+  const grouped = new Map<string, EditorValidationIssue[]>();
+  for (const i of validation.issues) {
+    const list = grouped.get(i.category) || [];
+    list.push(i);
+    grouped.set(i.category, list);
+  }
+
+  return (
+    <div className="p-3 space-y-2">
+      <div className="flex gap-2 text-xs">
+        <span className="text-red-600">错误 {validation.errorCount}</span>
+        <span className="text-yellow-600">警告 {validation.warningCount}</span>
+      </div>
+      {Array.from(grouped.entries()).map(([cat, issues]) => (
+        <div key={cat} className="border rounded">
+          <div className="px-2 py-1 bg-gray-50 text-xs font-semibold text-gray-700">
+            {categoryLabels[cat as keyof typeof categoryLabels] ?? cat} ({issues.length})
+          </div>
+          <ul className="divide-y">
+            {issues.map((issue, idx) => (
+              <li
+                key={idx}
+                onClick={() => onFocusError({ pieceId: issue.pieceId, connectionIndex: issue.connectionIndex })}
+                className={`p-2 text-xs cursor-pointer hover:bg-blue-50 ${issue.severity === 'error' ? 'text-red-700' : 'text-yellow-700'}`}
+              >
+                <div>{issue.message}</div>
+                <div className="text-[10px] text-gray-500 mt-0.5">
+                  {issue.pieceId && <span>零件: {issue.pieceId} </span>}
+                  {issue.connectionIndex !== undefined && <span>连接 #{issue.connectionIndex} </span>}
+                  {issue.portId && <span>端口: {issue.portId} </span>}
+                  {issue.stepId !== undefined && <span>步骤: {issue.stepId} </span>}
+                </div>
+                <div className="text-[10px] text-blue-500 mt-0.5">→ {suggestFix(issue)}</div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ----------------- 方案信息 Tab ----------------- */
+function InfoTab({ project, onUpdateMetadata }: {
+  project: EditorProject;
+  onUpdateMetadata: (patch: Partial<EditorProject['metadata']>) => void;
+}) {
+  const m = project.metadata;
+  return (
+    <div className="p-3 space-y-3">
+      <Field label="方案名称">
+        <input
+          type="text"
+          value={m.name}
+          onChange={(e) => onUpdateMetadata({ name: e.target.value })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="简介">
+        <textarea
+          value={m.description}
+          onChange={(e) => onUpdateMetadata({ description: e.target.value })}
+          className="w-full px-2 py-1 text-sm border rounded"
+          rows={2}
+        />
+      </Field>
+      <Field label="难度">
+        <select
+          value={m.difficulty}
+          onChange={(e) => onUpdateMetadata({ difficulty: e.target.value as Difficulty })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        >
+          <option value="easy">简单</option>
+          <option value="medium">中等</option>
+          <option value="hard">困难</option>
+        </select>
+      </Field>
+      <Field label="主题">
+        <select
+          value={m.theme}
+          onChange={(e) => onUpdateMetadata({ theme: e.target.value as Theme })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        >
+          <option value="house">房子</option>
+          <option value="car">汽车</option>
+          <option value="rocket">火箭</option>
+          <option value="animal">动物</option>
+          <option value="castle">城堡</option>
+          <option value="other">其他</option>
+        </select>
+      </Field>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="最小年龄">
+          <input
+            type="number"
+            value={m.minAge}
+            onChange={(e) => onUpdateMetadata({ minAge: Number(e.target.value) })}
+            className="w-full px-2 py-1 text-sm border rounded"
+          />
+        </Field>
+        <Field label="最大年龄">
+          <input
+            type="number"
+            value={m.maxAge}
+            onChange={(e) => onUpdateMetadata({ maxAge: Number(e.target.value) })}
+            className="w-full px-2 py-1 text-sm border rounded"
+          />
+        </Field>
+      </div>
+      <Field label="预计搭建时间">
+        <input
+          type="text"
+          value={m.estimatedTime}
+          onChange={(e) => onUpdateMetadata({ estimatedTime: e.target.value })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="构建模式">
+        <select
+          value={m.buildMode}
+          onChange={(e) => onUpdateMetadata({ buildMode: e.target.value as any })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        >
+          <option value="solid">solid(立体)</option>
+          <option value="flat">flat(平面)</option>
+          <option value="standing">standing(站立)</option>
+        </select>
+      </Field>
+      <Field label="标签(逗号分隔)">
+        <input
+          type="text"
+          value={m.tags.join(', ')}
+          onChange={(e) => onUpdateMetadata({ tags: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="教学提示(逗号分隔)">
+        <input
+          type="text"
+          value={m.teachingTips.join(', ')}
+          onChange={(e) => onUpdateMetadata({ teachingTips: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="安全提示(逗号分隔)">
+        <input
+          type="text"
+          value={m.safetyTips.join(', ')}
+          onChange={(e) => onUpdateMetadata({ safetyTips: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="作者">
+        <input
+          type="text"
+          value={m.author}
+          onChange={(e) => onUpdateMetadata({ author: e.target.value })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <Field label="数据版本">
+        <input
+          type="text"
+          value={m.dataVersion}
+          onChange={(e) => onUpdateMetadata({ dataVersion: e.target.value })}
+          className="w-full px-2 py-1 text-sm border rounded"
+        />
+      </Field>
+      <div className="text-[10px] text-gray-400 pt-2 border-t">
+        <div>schemaVersion: {project.schemaVersion}</div>
+        <div>ID: {project.id}</div>
+        <div>创建: {new Date(project.createdAt).toLocaleString()}</div>
+        <div>更新: {new Date(project.updatedAt).toLocaleString()}</div>
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="text-xs text-gray-500">{label}</label>
+      {children}
+    </div>
+  );
+}
+
+function colorSwatch(c: MagnetColor): string {
+  const map: Record<MagnetColor, string> = {
+    red: '#ff6b6b', orange: '#ff9f43', yellow: '#ffe66d', green: '#4ecd96',
+    cyan: '#4ecd98', blue: '#3498db', purple: '#9b59b6', pink: '#f5b7b1',
+    white: '#ffffff', black: '#2c3e50', clear: '#e0f7fa',
+  };
+  return map[c];
+}

@@ -1,14 +1,12 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
-import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, ContactShadows } from '@react-three/drei';
 import * as THREE from 'three';
 import { Model, MagnetColor } from '../data/types';
-import { magnetColorMap, magnetEdgeColorMap } from '../data/models';
 import { solveConnections } from '../engine/solver';
 import { getShapeDef } from '../engine/shapes';
-import { ShapeDef, PieceTransform } from '../engine/types';
-import { parseRgbaString } from '../utils/color';
-import { insetVertices } from '../utils/geometry';
+import { PieceTransform } from '../engine/types';
+import { MagnetPieceMesh, debugFlags } from './magnet3d/primitives';
 
 interface MagnetScene3DProps {
   model: Model;
@@ -56,236 +54,6 @@ function getPieceMap(model: Model): Record<string, NonNullable<Model['pieces']>[
   const map: Record<string, NonNullable<Model['pieces']>[number]> = {};
   model.pieces?.forEach((p) => (map[p.id] = p));
   return map;
-}
-
-const INSET = 0.06;
-const CENTER_THICKNESS_FACTOR = 0.7;
-
-interface DebugFlags {
-  showCenter: boolean;
-  showFrame: boolean;
-  showEdges: boolean;
-  showShadows: boolean;
-  showHighlight: boolean;
-}
-
-const debugFlags: DebugFlags = {
-  showCenter: true,
-  showFrame: true,
-  showEdges: true,
-  showShadows: true,
-  showHighlight: true,
-};
-
-(window as any).__MAGNET_DEBUG__ = debugFlags;
-
-const frameGeomCache = new Map<string, THREE.ExtrudeGeometry>();
-const centerGeomCache = new Map<string, THREE.ExtrudeGeometry>();
-const frameMatCache = new Map<string, THREE.MeshStandardMaterial>();
-const centerMatCache = new Map<string, THREE.MeshStandardMaterial>();
-const edgeMatCache = new Map<string, THREE.LineBasicMaterial>();
-
-function buildShapeFromVertices(vertices: { x: number; y: number }[]): THREE.Shape {
-  const s = new THREE.Shape();
-  if (vertices.length === 0) return s;
-  s.moveTo(vertices[0].x, vertices[0].y);
-  for (let i = 1; i < vertices.length; i++) {
-    s.lineTo(vertices[i].x, vertices[i].y);
-  }
-  s.closePath();
-  return s;
-}
-
-
-
-function createFrameGeometry(shape: ShapeDef): THREE.ExtrudeGeometry {
-  const cacheKey = shape.id;
-  if (frameGeomCache.has(cacheKey)) {
-    return frameGeomCache.get(cacheKey)!;
-  }
-
-  const outerShape = buildShapeFromVertices(shape.vertices);
-  const innerVerts = insetVertices(shape.vertices, INSET);
-  const innerShape = buildShapeFromVertices(innerVerts);
-
-  outerShape.holes.push(innerShape);
-
-  const geom = new THREE.ExtrudeGeometry(outerShape, {
-    depth: shape.thickness,
-    bevelEnabled: false,
-  });
-  geom.center();
-
-  frameGeomCache.set(cacheKey, geom);
-  return geom;
-}
-
-function createCenterGeometry(shape: ShapeDef): THREE.ExtrudeGeometry {
-  const cacheKey = shape.id;
-  if (centerGeomCache.has(cacheKey)) {
-    return centerGeomCache.get(cacheKey)!;
-  }
-
-  const innerVerts = insetVertices(shape.vertices, INSET);
-  const innerShape = buildShapeFromVertices(innerVerts);
-
-  const centerThickness = shape.thickness * CENTER_THICKNESS_FACTOR;
-  const geom = new THREE.ExtrudeGeometry(innerShape, {
-    depth: centerThickness,
-    bevelEnabled: false,
-  });
-  geom.center();
-
-  const offset = new THREE.Vector3(0, 0, (shape.thickness - centerThickness) / 2);
-  geom.translate(offset.x, offset.y, offset.z);
-
-  centerGeomCache.set(cacheKey, geom);
-  return geom;
-}
-
-function getFrameMaterial(color: MagnetColor): THREE.MeshStandardMaterial {
-  if (frameMatCache.has(color)) {
-    return frameMatCache.get(color)!;
-  }
-
-  const fill = parseRgbaString(magnetColorMap[color]);
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(fill.r * 0.85, fill.g * 0.85, fill.b * 0.85),
-    roughness: 0.3,
-    metalness: 0.2,
-    side: THREE.DoubleSide,
-    depthWrite: true,
-  });
-
-  frameMatCache.set(color, mat);
-  return mat;
-}
-
-function getCenterMaterial(color: MagnetColor): THREE.MeshStandardMaterial {
-  if (centerMatCache.has(color)) {
-    return centerMatCache.get(color)!;
-  }
-
-  const fill = parseRgbaString(magnetColorMap[color]);
-  const mat = new THREE.MeshStandardMaterial({
-    color: new THREE.Color(fill.r, fill.g, fill.b),
-    transparent: fill.a < 1,
-    opacity: fill.a,
-    roughness: 0.3,
-    metalness: 0.05,
-    side: THREE.FrontSide,
-    depthWrite: true,
-  });
-
-  centerMatCache.set(color, mat);
-  return mat;
-}
-
-function getEdgeMaterial(color: MagnetColor): THREE.LineBasicMaterial {
-  if (edgeMatCache.has(color)) {
-    return edgeMatCache.get(color)!;
-  }
-
-  const edge = parseRgbaString(magnetEdgeColorMap[color]);
-  const mat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(edge.r, edge.g, edge.b),
-    transparent: edge.a < 1,
-    opacity: edge.a,
-    linewidth: 2,
-  });
-
-  edgeMatCache.set(color, mat);
-  return mat;
-}
-
-function MagnetPieceMesh({
-  shape,
-  transform,
-  color,
-  isNew,
-}: {
-  shape: ShapeDef;
-  transform: PieceTransform;
-  color: MagnetColor;
-  isNew: boolean;
-}) {
-  const frameGeom = useMemo(() => createFrameGeometry(shape), [shape]);
-  const centerGeom = useMemo(() => createCenterGeometry(shape), [shape]);
-  const edgesGeom = useMemo(() => new THREE.EdgesGeometry(frameGeom), [frameGeom]);
-
-  const frameMat = useMemo(() => getFrameMaterial(color), [color]);
-  const centerMat = useMemo(() => getCenterMaterial(color), [color]);
-  const edgeMat = useMemo(() => getEdgeMaterial(color), [color]);
-
-  const groupRef = useRef<THREE.Group>(null);
-  const animProgress = useRef(0);
-  const isAnimatingRef = useRef(isNew);
-  const startPos = useRef<THREE.Vector3 | null>(null);
-
-  useEffect(() => {
-    if (!groupRef.current) return;
-
-    if (isNew) {
-      animProgress.current = 0;
-      isAnimatingRef.current = true;
-      startPos.current = transform.position.clone().add(new THREE.Vector3(0, 3, 0));
-      groupRef.current.position.copy(startPos.current);
-      groupRef.current.quaternion.copy(transform.quaternion);
-    } else {
-      isAnimatingRef.current = false;
-      groupRef.current.position.copy(transform.position);
-      groupRef.current.quaternion.copy(transform.quaternion);
-    }
-  }, [transform, isNew]);
-
-  useFrame((_, delta) => {
-    if (!isAnimatingRef.current || !groupRef.current) return;
-    if (animProgress.current >= 1) {
-      isAnimatingRef.current = false;
-      groupRef.current.position.copy(transform.position);
-      return;
-    }
-
-    animProgress.current = Math.min(1, animProgress.current + delta * 3);
-    const eased = 1 - Math.pow(1 - animProgress.current, 3);
-
-    if (startPos.current) {
-      groupRef.current.position.lerpVectors(startPos.current, transform.position, eased);
-    }
-  });
-
-  const highlightMat = useMemo(() => {
-    const fill = parseRgbaString(magnetColorMap[color]);
-    return new THREE.MeshStandardMaterial({
-      color: new THREE.Color(fill.r, fill.g, fill.b),
-      emissive: new THREE.Color(0.3, 0.3, 0.3),
-      emissiveIntensity: isNew && !isAnimatingRef.current ? 0.5 : 0,
-      roughness: 0.2,
-      metalness: 0.1,
-      side: THREE.FrontSide,
-      depthWrite: true,
-    });
-  }, [color, isNew]);
-
-  return (
-    <group ref={groupRef}>
-      {debugFlags.showFrame && (
-        <mesh geometry={frameGeom} castShadow={debugFlags.showShadows} receiveShadow={debugFlags.showShadows}>
-          <primitive object={frameMat} attach="material" />
-        </mesh>
-      )}
-      {debugFlags.showCenter && (
-        <mesh geometry={centerGeom}>
-          <primitive object={isNew && !isAnimatingRef.current && debugFlags.showHighlight ? highlightMat : centerMat} attach="material" />
-        </mesh>
-      )}
-      {debugFlags.showEdges && (
-        <lineSegments geometry={edgesGeom}>
-          <primitive object={edgeMat} attach="material" />
-        </lineSegments>
-      )}
-    </group>
-  );
 }
 
 function SceneContent({
@@ -570,3 +338,6 @@ export function MagnetScene3D({ model, stepIndex, highlightNew = false, interact
     </div>
   );
 }
+
+// 保留 debugFlags 引用以避免 tree-shaking 移除全局调试开关副作用
+void debugFlags;
