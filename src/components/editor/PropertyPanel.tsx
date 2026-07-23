@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import * as THREE from 'three';
 import { EditorProject } from '../../editor/types';
 import { EditorValidationResult, categoryLabels, suggestFix, EditorValidationIssue } from '../../editor/validate';
 import { buildMaterialInventory } from '../../editor/serialization';
@@ -21,6 +22,7 @@ interface Props {
   onSaveCameraPreset: (preset: { label: string; position: [number, number, number]; target: [number, number, number]; zoom: number; stepId?: number }) => void;
   onAddPieceToStep: (stepId: number, pieceId: string) => void;
   onUpdateStep: (stepId: number, patch: any) => void;
+  onSetPieceTransform: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
 }
 
 export function PropertyPanel(props: Props) {
@@ -105,13 +107,93 @@ function MaterialList({ project }: { project: EditorProject }) {
 }
 
 function PieceProps(props: Props) {
-  const { project, selection, onSetPieceColor, onDuplicatePiece, onDeleteSelected, onAddPieceToStep, currentStepId } = props;
+  const { project, selection, onSetPieceColor, onDuplicatePiece, onDeleteSelected, onAddPieceToStep, currentStepId, onSetPieceTransform } = props;
   const piece = project.pieces.find((p) => p.id === (selection as any).id);
+  const [posDraft, setPosDraft] = useState<{ x: string; y: string; z: string } | null>(null);
+  const [rotDraft, setRotDraft] = useState<{ x: string; y: string; z: string } | null>(null);
+
   if (!piece) return <p className="text-xs text-gray-400 p-4">零件不存在</p>;
   const part = project.parts.find((p) => p.id === piece.partId);
   if (!part) return <p className="text-xs text-red-500 p-4">partId 悬空: {piece.partId}</p>;
   const shape = part.shape;
   const tf = project.transforms[piece.id];
+
+  // 当前位置和旋转(显示用)
+  const curPos = tf?.position ?? [0, 0, 0];
+  const curQuat = new THREE.Quaternion(
+    tf?.quaternion[0] ?? 0,
+    tf?.quaternion[1] ?? 0,
+    tf?.quaternion[2] ?? 0,
+    tf?.quaternion[3] ?? 1
+  );
+  const curEuler = new THREE.Euler().setFromQuaternion(curQuat, 'XYZ');
+  const curRotDeg = [
+    THREE.MathUtils.radToDeg(curEuler.x),
+    THREE.MathUtils.radToDeg(curEuler.y),
+    THREE.MathUtils.radToDeg(curEuler.z),
+  ];
+
+  // 编辑中的草稿值优先显示
+  const posDisplay = posDraft ?? { x: curPos[0].toFixed(2), y: curPos[1].toFixed(2), z: curPos[2].toFixed(2) };
+  const rotDisplay = rotDraft ?? { x: curRotDeg[0].toFixed(0), y: curRotDeg[1].toFixed(0), z: curRotDeg[2].toFixed(0) };
+
+  // 提交位置(回车或失焦时)
+  const commitPosition = () => {
+    if (!posDraft) return;
+    const x = parseFloat(posDraft.x);
+    const y = parseFloat(posDraft.y);
+    const z = parseFloat(posDraft.z);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      onSetPieceTransform(piece.id, {
+        position: [x, y, z],
+        quaternion: [curQuat.x, curQuat.y, curQuat.z, curQuat.w],
+      });
+    }
+    setPosDraft(null);
+  };
+
+  // 提交旋转(回车或失焦时)
+  const commitRotation = () => {
+    if (!rotDraft) return;
+    const x = parseFloat(rotDraft.x);
+    const y = parseFloat(rotDraft.y);
+    const z = parseFloat(rotDraft.z);
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)) {
+      const q = new THREE.Quaternion().setFromEuler(
+        new THREE.Euler(
+          THREE.MathUtils.degToRad(x),
+          THREE.MathUtils.degToRad(y),
+          THREE.MathUtils.degToRad(z),
+          'XYZ'
+        )
+      );
+      onSetPieceTransform(piece.id, {
+        position: [curPos[0], curPos[1], curPos[2]],
+        quaternion: [q.x, q.y, q.z, q.w],
+      });
+    }
+    setRotDraft(null);
+  };
+
+  // 旋转快捷:绕指定轴旋转指定角度
+  const rotateBy = (axis: 'x' | 'y' | 'z', deg: number) => {
+    const axisVec = axis === 'x' ? new THREE.Vector3(1, 0, 0)
+      : axis === 'y' ? new THREE.Vector3(0, 1, 0)
+      : new THREE.Vector3(0, 0, 1);
+    const q = curQuat.clone().multiply(new THREE.Quaternion().setFromAxisAngle(axisVec, THREE.MathUtils.degToRad(deg)));
+    onSetPieceTransform(piece.id, {
+      position: [curPos[0], curPos[1], curPos[2]],
+      quaternion: [q.x, q.y, q.z, q.w],
+    });
+  };
+
+  // 重置旋转
+  const resetRotation = () => {
+    onSetPieceTransform(piece.id, {
+      position: [curPos[0], curPos[1], curPos[2]],
+      quaternion: [0, 0, 0, 1],
+    });
+  };
 
   return (
     <div className="p-3 space-y-3">
@@ -137,15 +219,57 @@ function PieceProps(props: Props) {
           ))}
         </div>
       </div>
-      {tf && (
-        <div>
-          <div className="text-xs text-gray-500">位置(自由编辑,非吸附)</div>
-          <div className="text-[10px] font-mono text-gray-700 mt-0.5">
-            ({tf.position[0].toFixed(2)}, {tf.position[1].toFixed(2)}, {tf.position[2].toFixed(2)})
-          </div>
-          <div className="text-[10px] text-gray-400 mt-0.5">WASDQE 移动 · Shift 大步</div>
+      {/* 位置 */}
+      <div>
+        <div className="text-xs text-gray-500 mb-1">位置 (X / Y / Z)</div>
+        <div className="grid grid-cols-3 gap-1">
+          {(['x', 'y', 'z'] as const).map((axis) => (
+            <label key={axis} className="block">
+              <span className="text-[10px] text-gray-400">{axis.toUpperCase()}</span>
+              <input
+                type="number"
+                step={0.1}
+                value={posDisplay[axis]}
+                onChange={(e) => setPosDraft({ ...posDisplay, [axis]: e.target.value })}
+                onBlur={commitPosition}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitPosition(); }}
+                className="w-full px-1 py-0.5 text-xs border rounded font-mono"
+              />
+            </label>
+          ))}
         </div>
-      )}
+      </div>
+      {/* 旋转(欧拉角 XYZ 度数) */}
+      <div>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-gray-500">旋转 (度, XYZ)</span>
+          <button onClick={resetRotation} className="text-[10px] text-blue-500 hover:underline">重置</button>
+        </div>
+        <div className="grid grid-cols-3 gap-1">
+          {(['x', 'y', 'z'] as const).map((axis) => (
+            <label key={axis} className="block">
+              <span className="text-[10px] text-gray-400">{axis.toUpperCase()}</span>
+              <input
+                type="number"
+                step={15}
+                value={rotDisplay[axis]}
+                onChange={(e) => setRotDraft({ ...rotDisplay, [axis]: e.target.value })}
+                onBlur={commitRotation}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitRotation(); }}
+                className="w-full px-1 py-0.5 text-xs border rounded font-mono"
+              />
+            </label>
+          ))}
+        </div>
+        <div className="flex flex-wrap gap-1 mt-1">
+          <button onClick={() => rotateBy('y', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="R">Y +15°</button>
+          <button onClick={() => rotateBy('y', -15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="T">Y -15°</button>
+          <button onClick={() => rotateBy('x', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="F">X +15°</button>
+          <button onClick={() => rotateBy('x', -15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="G">X -15°</button>
+          <button onClick={() => rotateBy('z', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="V">Z +15°</button>
+          <button onClick={() => rotateBy('z', -15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="B">Z -15°</button>
+        </div>
+      </div>
       <div className="text-xs">
         <span className="text-gray-500">根零件:</span>
         <span className="ml-1">{piece.isRoot ? '是' : '否'}</span>

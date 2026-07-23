@@ -1,5 +1,5 @@
-import { useRef, useMemo, useEffect, useCallback } from 'react';
-import { Canvas, useThree } from '@react-three/fiber';
+import { useRef, useMemo, useEffect, useCallback, useState } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
 import { OrbitControls, ContactShadows, Line } from '@react-three/drei';
 import * as THREE from 'three';
 import { MagnetColor } from '../../data/types';
@@ -26,6 +26,73 @@ interface DefaultCameraState {
   quaternion: THREE.Quaternion;
   zoom: number;
   target: THREE.Vector3;
+}
+
+/**
+ * 拖拽控制器:在 Y=0 水平面投影鼠标位置,实时更新选中零件位置。
+ * 拖拽期间禁用 OrbitControls,松开后恢复。
+ */
+function DragController({
+  transforms,
+  onMovePiece,
+  draggingRef,
+  controlsRef,
+}: {
+  transforms: Record<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>;
+  onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  draggingRef: React.MutableRefObject<{ pieceId: string; offset: THREE.Vector3 } | null>;
+  controlsRef: React.MutableRefObject<any>;
+}) {
+  const { camera, pointer } = useThree();
+  const planeRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const lastDragPosRef = useRef<THREE.Vector3 | null>(null);
+
+  // 拖拽中:每帧把鼠标投影到拖拽平面,更新位置
+  useFrame(() => {
+    const drag = draggingRef.current;
+    if (!drag) return;
+    const tf = transforms[drag.pieceId];
+    if (!tf) return;
+
+    raycasterRef.current.setFromCamera(pointer, camera);
+    const hit = new THREE.Vector3();
+    if (!raycasterRef.current.ray.intersectPlane(planeRef.current, hit)) return;
+
+    // 拖拽平面在零件当前 Y 高度(保持 Y 不变,只在 XZ 平面移动)
+    planeRef.current.constant = -tf.position.y;
+
+    if (!lastDragPosRef.current) {
+      lastDragPosRef.current = hit.clone();
+      return;
+    }
+    // 计算位移增量,避免瞬移
+    const delta = hit.clone().sub(lastDragPosRef.current);
+    lastDragPosRef.current = hit.clone();
+
+    // 应用偏移
+    const newPos = tf.position.clone().add(delta);
+    onMovePiece(drag.pieceId, {
+      position: [newPos.x, newPos.y, newPos.z],
+      quaternion: [tf.quaternion.x, tf.quaternion.y, tf.quaternion.z, tf.quaternion.w],
+    });
+  });
+
+  // 监听指针抬起
+  useEffect(() => {
+    const onPointerUp = () => {
+      if (draggingRef.current) {
+        draggingRef.current = null;
+        lastDragPosRef.current = null;
+        if (controlsRef.current) controlsRef.current.enabled = true;
+        document.body.style.cursor = 'grab';
+      }
+    };
+    window.addEventListener('pointerup', onPointerUp);
+    return () => window.removeEventListener('pointerup', onPointerUp);
+  }, [draggingRef, controlsRef]);
+
+  return null;
 }
 
 function SceneContent({
@@ -67,6 +134,10 @@ function SceneContent({
 
   const controlsRef = useRef<any>(null);
   const { camera, size } = useThree();
+
+  // 拖拽状态
+  const draggingRef = useRef<{ pieceId: string; offset: THREE.Vector3 } | null>(null);
+  const [hoveredPiece, setHoveredPiece] = useState<string | null>(null);
 
   const fitCameraToPiece = useCallback((pieceId: string) => {
     if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
@@ -178,32 +249,64 @@ function SceneContent({
     resetViewRef.current = resetView;
   }, [resetView, resetViewRef]);
 
-  // 键盘移动选中零件(WASD / QE)
+  // 键盘移动/旋转选中零件(WASDQE 移动 / RTFGVB 旋转)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (selection.kind !== 'piece') return;
       const tf = transforms[selection.id];
       if (!tf) return;
       const step = e.shiftKey ? 1.0 : 0.2;
+      const rotStep = e.shiftKey ? 45 : 15; // 度
       const pos = [tf.position.x, tf.position.y, tf.position.z] as [number, number, number];
-      const q = [tf.quaternion.x, tf.quaternion.y, tf.quaternion.z, tf.quaternion.w] as [number, number, number, number];
+      const q = new THREE.Quaternion(tf.quaternion.x, tf.quaternion.y, tf.quaternion.z, tf.quaternion.w);
       let moved = false;
-      switch (e.key.toLowerCase()) {
+      let rotated = false;
+      const key = e.key.toLowerCase();
+      switch (key) {
+        // 移动
         case 'a': pos[0] -= step; moved = true; break;
         case 'd': pos[0] += step; moved = true; break;
         case 'w': pos[2] -= step; moved = true; break;
         case 's': pos[2] += step; moved = true; break;
         case 'q': pos[1] += step; moved = true; break;
         case 'e': pos[1] -= step; moved = true; break;
+        // 旋转(绕世界轴)
+        case 'r': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(rotStep))); rotated = true; break;
+        case 't': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(-rotStep))); rotated = true; break;
+        case 'f': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(rotStep))); rotated = true; break;
+        case 'g': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(-rotStep))); rotated = true; break;
+        case 'v': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(rotStep))); rotated = true; break;
+        case 'b': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(-rotStep))); rotated = true; break;
       }
-      if (moved) {
+      if (moved || rotated) {
         e.preventDefault();
-        onMovePiece(selection.id, { position: pos, quaternion: q });
+        onMovePiece(selection.id, {
+          position: pos,
+          quaternion: [q.x, q.y, q.z, q.w],
+        });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selection, transforms, onMovePiece]);
+
+  // 启动拖拽:选中零件时按住鼠标左键拖动
+  const handlePiecePointerDown = useCallback((pieceId: string, e: any) => {
+    e.stopPropagation();
+    onSelectPiece(pieceId);
+    const tf = transforms[pieceId];
+    if (!tf) return;
+    // 记录拖拽起点(鼠标投影到 Y=0 平面,计算与零件的偏移)
+    draggingRef.current = {
+      pieceId,
+      offset: new THREE.Vector3(0, tf.position.y, 0), // 仅记录 Y,拖拽时保持
+    };
+    lastDragPosRefHolder.current = null;
+    if (controlsRef.current) controlsRef.current.enabled = false;
+    document.body.style.cursor = 'grabbing';
+  }, [transforms, onSelectPiece]);
+
+  const lastDragPosRefHolder = useRef<THREE.Vector3 | null>(null);
 
   return (
     <>
@@ -220,6 +323,14 @@ function SceneContent({
       {/* 网格地面 */}
       <gridHelper args={[20, 20, '#cbd5e1', '#e2e8f0']} position={[0, -0.01, 0]} />
 
+      {/* 拖拽控制器 */}
+      <DragController
+        transforms={transforms}
+        onMovePiece={onMovePiece}
+        draggingRef={draggingRef}
+        controlsRef={controlsRef}
+      />
+
       {/* 磁力片 */}
       {project.pieces.map((piece) => {
         const tf = transforms[piece.id];
@@ -229,6 +340,7 @@ function SceneContent({
         if (!shape) return null;
         const isSelected = selection.kind === 'piece' && selection.id === piece.id;
         const isDimmed = selection.kind === 'piece' && selection.id !== piece.id;
+        const isHovered = hoveredPiece === piece.id;
         return (
           <MagnetPieceMesh
             key={piece.id}
@@ -236,13 +348,15 @@ function SceneContent({
             transform={tf}
             color={part.color as MagnetColor}
             selected={isSelected}
+            highlighted={isHovered && !isSelected}
             dimmed={isDimmed}
             onClick={(e: any) => {
               e.stopPropagation();
               onSelectPiece(piece.id);
             }}
-            onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; }}
-            onPointerOut={() => { document.body.style.cursor = 'default'; }}
+            onPointerDown={(e: any) => handlePiecePointerDown(piece.id, e)}
+            onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'grab'; setHoveredPiece(piece.id); }}
+            onPointerOut={() => { document.body.style.cursor = 'default'; setHoveredPiece(null); }}
           />
         );
       })}
@@ -338,8 +452,9 @@ export function EditorCanvas({
         </svg>
       </button>
 
-      <div className="absolute bottom-3 left-3 text-xs text-gray-400 pointer-events-none">
-        <div>拖拽:旋转视角 · WASDQE:移动选中件(Shift 大步)</div>
+      <div className="absolute bottom-3 left-3 text-xs text-gray-500 pointer-events-none space-y-0.5">
+        <div>左键拖零件:移动 · 右键拖:旋转视角 · 滚轮:缩放</div>
+        <div>WASDQE:移动 · RTFGVB:旋转(Shift 大步)</div>
       </div>
     </div>
   );

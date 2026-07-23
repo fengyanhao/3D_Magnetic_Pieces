@@ -327,6 +327,7 @@ export function EditorWorkspace() {
             currentStepId={currentStepId}
             onAddPieceToStep={handleAddPieceToStep}
             onUpdateStep={handleUpdateStep}
+            onSetPieceTransform={handleSetPieceTransform}
           />
         </aside>
       </div>

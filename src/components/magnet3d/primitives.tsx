@@ -165,6 +165,7 @@ export interface MagnetPieceMeshProps {
   highlighted?: boolean;
   dimmed?: boolean;
   onClick?: (e: any) => void;
+  onPointerDown?: (e: any) => void;
   onPointerOver?: (e: any) => void;
   onPointerOut?: (e: any) => void;
 }
@@ -182,6 +183,7 @@ export function MagnetPieceMesh({
   highlighted = false,
   dimmed = false,
   onClick,
+  onPointerDown,
   onPointerOver,
   onPointerOut,
 }: MagnetPieceMeshProps) {
@@ -252,6 +254,7 @@ export function MagnetPieceMesh({
     <group
       ref={groupRef}
       onClick={onClick}
+      onPointerDown={onPointerDown}
       onPointerOver={onPointerOver}
       onPointerOut={onPointerOut}
     >
