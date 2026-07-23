@@ -2,37 +2,53 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!-- 在任何脚本/资源加载前，立即注销旧 Service Worker，避免其拦截 /editor 等新路由返回 404 -->
+    <script>
+      (function () {
+        if (!('serviceWorker' in navigator)) return;
+        // 如果当前没有 SW 控制，直接触发注销残留 SW（若有）后放行
+        if (!navigator.serviceWorker.controller) {
+          navigator.serviceWorker.getRegistrations().then(function (regs) {
+            regs.forEach(function (r) { r.unregister(); });
+          });
+          if ('caches' in window) {
+            caches.keys().then(function (names) {
+              names.forEach(function (n) { caches.delete(n); });
+            });
+          }
+          return;
+        }
+        // 有 SW 控制当前页面：注销 + 清缓存，然后刷新一次让请求绕过 SW
+        // 用 sessionStorage 防止无限刷新循环
+        var flag = sessionStorage.getItem('__sw_cleared__');
+        if (flag) {
+          // 已经刷新过一次但 SW 仍在控制，强制注销后放行（下次请求即生效）
+          sessionStorage.removeItem('__sw_cleared__');
+          navigator.serviceWorker.getRegistrations().then(function (regs) {
+            regs.forEach(function (r) { r.unregister(); });
+          });
+          return;
+        }
+        sessionStorage.setItem('__sw_cleared__', '1');
+        navigator.serviceWorker.getRegistrations().then(function (regs) {
+          regs.forEach(function (r) { r.unregister(); });
+        });
+        if ('caches' in window) {
+          caches.keys().then(function (names) {
+            names.forEach(function (n) { caches.delete(n); });
+          });
+        }
+        location.reload();
+      })();
+    </script>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect x='20' y='30' width='60' height='50' rx='6' fill='%23FF6B6B' opacity='0.8'/%3E%3Cpolygon points='15,30 50,5 85,30' fill='%234ECDC4' opacity='0.8'/%3E%3C/svg%3E" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f97316" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
-    <link rel="manifest" href="/manifest.json" />
+    <!-- PWA 能力当前阶段不启用；未来如需重新上线，请恢复 manifest.json 和 Apple Web App 标记 -->
     <title>亲子磁力片</title>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js').then((registration) => {
-            registration.addEventListener('updatefound', () => {
-              const newWorker = registration.installing;
-              newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  if (confirm('发现新版本，是否刷新更新？')) {
-                    window.location.reload();
-                  }
-                }
-              });
-            });
-          }).catch((err) => {
-            console.log('Service Worker 注册失败:', err);
-          });
-        });
-      }
-    </script>
   </body>
 </html>
