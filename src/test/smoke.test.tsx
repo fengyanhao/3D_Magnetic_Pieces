@@ -24,7 +24,7 @@ describe('浏览器冒烟测试', () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(screen.getByRole('heading', { name: /亲子磁力片/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: /亲子磁力片/i }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/精选推荐/i)).toBeInTheDocument();
     expect(document.body.textContent?.trim().length).toBeGreaterThan(10);
   });
@@ -37,7 +37,7 @@ describe('浏览器冒烟测试', () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(screen.getByText(/模型列表/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/筛选/i).length).toBeGreaterThanOrEqual(1);
     const cards = screen.getAllByRole('button');
     expect(cards.length).toBeGreaterThan(0);
   });

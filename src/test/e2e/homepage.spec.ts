@@ -20,14 +20,18 @@ test('点击模型卡片进入详情页', async ({ page }) => {
 
 test('主题筛选功能', async ({ page }) => {
   await page.goto('/list');
+  await page.waitForLoadState('networkidle');
 
-  // 打开筛选面板
+  // 如果在移动端，先展开筛选面板
   const filterBtn = page.locator('button:has-text("筛选")');
-  await filterBtn.click();
-  await page.waitForTimeout(500);
+  const filterCount = await filterBtn.count();
+  if (filterCount > 0 && await filterBtn.first().isVisible()) {
+    await filterBtn.first().click();
+    await page.waitForTimeout(300);
+  }
 
-  // 点击房子主题（使用精确匹配的 role 选择器）
-  const houseBtn = page.getByRole('button', { name: '房子', exact: true });
+  // 点击房子主题（:visible 确保选中当前可见的按钮）
+  const houseBtn = page.locator('button:has-text("房子"):visible').first();
   await houseBtn.click();
 
   // 等待URL更新
@@ -37,13 +41,18 @@ test('主题筛选功能', async ({ page }) => {
 
 test('难度筛选功能', async ({ page }) => {
   await page.goto('/list');
+  await page.waitForLoadState('networkidle');
 
-  // 打开筛选面板
+  // 如果在移动端，先展开筛选面板
   const filterBtn = page.locator('button:has-text("筛选")');
-  await filterBtn.click();
+  const filterCount = await filterBtn.count();
+  if (filterCount > 0 && await filterBtn.first().isVisible()) {
+    await filterBtn.first().click();
+    await page.waitForTimeout(300);
+  }
 
-  // 点击简单难度
-  const easyBtn = page.locator('button:has-text("简单")').first();
+  // 点击简单难度（:visible 确保选中当前可见的按钮）
+  const easyBtn = page.locator('button:has-text("简单"):visible').first();
   await easyBtn.click();
 
   // 等待URL更新

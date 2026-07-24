@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import type { ToolMode } from './EditorCanvas';
 
 interface ExistingModel {
   id: string;
@@ -18,12 +19,26 @@ interface Props {
   onExport: () => void;
   onValidate: () => void;
   onPreview: () => void;
+  onFitAll: () => void;
+  onShowDrafts: () => void;
+  onSaveAs: () => void;
+  autoSaved: boolean;
+  toolMode: ToolMode;
+  onToolModeChange: (mode: ToolMode) => void;
 }
+
+const TOOL_MODES: { mode: ToolMode; label: string; title: string }[] = [
+  { mode: 'select', label: '选择', title: '选择模式 (默认)' },
+  { mode: 'move', label: '移动', title: '移动模式:三轴 Gizmo 平移' },
+  { mode: 'rotate', label: '旋转', title: '旋转模式:三轴 Gizmo 旋转' },
+  { mode: 'snap', label: '磁吸', title: '磁吸模式:拖动靠近兼容端口自动吸附' },
+];
 
 /** 顶部工具栏。 */
 export function EditorToolbar({
   canUndo, canRedo, validationValid, existingModels,
   onNew, onUndo, onRedo, onImportExisting, onImportFile, onExport, onValidate, onPreview,
+  onFitAll, onShowDrafts, onSaveAs, autoSaved, toolMode, onToolModeChange,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -34,6 +49,42 @@ export function EditorToolbar({
       <ToolButton onClick={onNew} title="新建方案">新建</ToolButton>
       <ToolButton onClick={onUndo} disabled={!canUndo} title="撤销 (Ctrl+Z)">撤销</ToolButton>
       <ToolButton onClick={onRedo} disabled={!canRedo} title="重做 (Ctrl+Y)">重做</ToolButton>
+
+      <div className="w-px h-5 bg-gray-300 mx-1" />
+
+      {/* 工具模式切换(P0-2):选择/移动/旋转/磁吸 */}
+      <div className="flex items-center gap-0.5" role="group" aria-label="工具模式">
+        {TOOL_MODES.map((m) => (
+          <button
+            key={m.mode}
+            onClick={() => onToolModeChange(m.mode)}
+            title={m.title}
+            aria-pressed={toolMode === m.mode}
+            className={`px-2 py-1 text-xs rounded border transition-colors ${
+              toolMode === m.mode
+                ? 'bg-blue-500 text-white border-blue-500'
+                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+            }`}
+          >
+            {m.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="w-px h-5 bg-gray-300 mx-1" />
+
+      <ToolButton onClick={onFitAll} title="全部入镜 (fit)">入镜</ToolButton>
+
+      <div className="w-px h-5 bg-gray-300 mx-1" />
+
+      {/* P0-5: 草稿管理 */}
+      <ToolButton onClick={onShowDrafts} title="查看最近草稿列表">草稿</ToolButton>
+      <ToolButton onClick={onSaveAs} title="另存为新草稿">另存为</ToolButton>
+      {autoSaved && (
+        <span className="text-xs text-green-600 px-1" role="status" aria-live="polite">
+          草稿已自动保存
+        </span>
+      )}
 
       <div className="w-px h-5 bg-gray-300 mx-1" />
 

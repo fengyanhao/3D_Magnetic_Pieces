@@ -1,4 +1,4 @@
-import { Vector3, Quaternion } from 'three';
+import { Vector3, Quaternion, Matrix4 } from 'three';
 import { Connection, ShapeDef, PieceTransform } from '../engine/types';
 import { getPort, getShapeDef } from '../engine/shapes';
 import { computeTransformFromConnection } from '../engine/solver';
@@ -219,4 +219,92 @@ export function buildPortUsage(project: EditorProject): Set<string> {
     used.add(`${c.pieceB}:${c.portB}`);
   }
   return used;
+}
+
+/* ----------------- P0-3: 连接组件语义 ----------------- */
+
+/**
+ * 判断某零件是否为已连接组件的非根成员。
+ * 返回将其连到父零件的 connection 索引(若存在)。
+ */
+export function findConnectionToParent(
+  pieceId: string,
+  project: EditorProject,
+): { index: number; connection: Connection; isPieceA: boolean } | null {
+  // 找到根零件,用 BFS 确定父子关系
+  const root = project.pieces.find((p) => p.isRoot) || project.pieces[0];
+  if (!root || root.id === pieceId) return null;
+
+  const adj: Record<string, { conn: Connection; idx: number; neighbor: string }[]> = {};
+  project.connections.forEach((conn, idx) => {
+    if (!adj[conn.pieceA]) adj[conn.pieceA] = [];
+    if (!adj[conn.pieceB]) adj[conn.pieceB] = [];
+    adj[conn.pieceA].push({ conn, idx, neighbor: conn.pieceB });
+    adj[conn.pieceB].push({ conn, idx, neighbor: conn.pieceA });
+  });
+
+  const visited = new Set<string>([root.id]);
+  const queue = [root.id];
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const { conn, idx, neighbor } of adj[cur] || []) {
+      if (visited.has(neighbor)) continue;
+      visited.add(neighbor);
+      if (neighbor === pieceId) {
+        return { index: idx, connection: conn, isPieceA: conn.pieceA === cur };
+      }
+      queue.push(neighbor);
+    }
+  }
+  return null;
+}
+
+/**
+ * 根据子零件被拖动后的新变换,推算连接的二面角(P0-3 "调整连接角度")。
+ * 比较子零件新法线与父零件法线在连接轴上的夹角。
+ */
+export function computeDihedralFromMovedTransform(
+  pieceId: string,
+  newTransform: PieceTransform,
+  project: EditorProject,
+): { index: number; dihedralDeg: number } | null {
+  const parent = findConnectionToParent(pieceId, project);
+  if (!parent) return null;
+
+  const getShape = makeGetShape(project);
+  const display = getDisplayTransforms(project);
+  const { connection, isPieceA } = parent;
+
+  // 父零件 ID 和端口
+  const parentId = isPieceA ? connection.pieceA : connection.pieceB;
+  const parentPortId = isPieceA ? connection.portA : connection.portB;
+  const parentShape = getShape(parentId);
+  if (!parentShape) return null;
+  const parentPort = getPort(parentShape, parentPortId);
+  if (!parentPort) return null;
+
+  const parentTf = display[parentId];
+  if (!parentTf) return null;
+
+  // 父端口的世界方向(连接轴)
+  const parentMatrix = new Matrix4().compose(parentTf.position, parentTf.quaternion, new Vector3(1, 1, 1));
+  const pA0 = new Vector3(parentPort.p0.x, parentPort.p0.y, 0).applyMatrix4(parentMatrix);
+  const pA1 = new Vector3(parentPort.p1.x, parentPort.p1.y, 0).applyMatrix4(parentMatrix);
+  const axis = new Vector3().subVectors(pA1, pA0).normalize();
+
+  // 父零件法线
+  const parentNormal = new Vector3(0, 0, 1).applyQuaternion(parentTf.quaternion).normalize();
+  // 子零件新法线
+  const childNormal = new Vector3(0, 0, 1).applyQuaternion(newTransform.quaternion).normalize();
+
+  // 二面角 = 子法线相对父法线绕 axis 的旋转
+  const projParent = parentNormal.clone().projectOnPlane(axis).normalize();
+  const projChild = childNormal.clone().projectOnPlane(axis).normalize();
+  const dot = Math.max(-1, Math.min(1, projParent.dot(projChild)));
+  const cross = new Vector3().crossVectors(projParent, projChild);
+  const sign = cross.dot(axis) >= 0 ? 1 : -1;
+  const angle = Math.atan2(sign * cross.length(), dot);
+  const dihedralDeg = (angle * 180) / Math.PI;
+
+  return { index: parent.index, dihedralDeg };
 }

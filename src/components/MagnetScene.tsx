@@ -2,13 +2,10 @@ import { RotateCcw } from 'lucide-react';
 import { useMemo, useRef, useState, useEffect, Suspense, lazy } from 'react';
 import { Model, MagnetPiece } from '../data/types';
 import { magnetColorMap, magnetEdgeColorMap } from '../data/models';
-import { MagnetScene3D as MagnetScene3DSync } from './MagnetScene3D';
-import { RUNTIME_FLAGS } from '../utils/standalone';
 
-// standalone 模式下使用同步 import，把 Three.js 一起内嵌进 HTML
-// 开发/生产模式继续走 lazy 拆分
-const MagnetScene3DLazy = lazy(() => import('./MagnetScene3D').then(m => ({ default: m.MagnetScene3D })));
-const MagnetScene3D = RUNTIME_FLAGS.isStandalone ? MagnetScene3DSync : MagnetScene3DLazy;
+// 统一使用动态导入，避免 Three.js 被打包进首页 chunk
+// 进入模型详情或编辑器时才会加载 3D 相关代码
+const MagnetScene3D = lazy(() => import('./MagnetScene3D').then(m => ({ default: m.MagnetScene3D })));
 
 interface MagnetSceneProps {
   model: Model;

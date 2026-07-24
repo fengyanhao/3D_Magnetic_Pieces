@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
+import * as THREE from 'three';
 import {
   createInitialHistory, replaceProject, createEmptyProject,
   undo, redo, canUndo, canRedo,
@@ -13,14 +14,17 @@ import { runValidation, EditorValidationResult } from '../../editor/validate';
 import { serializeProject, parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
 import { modelToProject } from '../../editor/serialization';
 import { EditorProject } from '../../editor/types';
+import { findConnectionToParent, computeDihedralFromMovedTransform } from '../../editor/snap';
+import { PieceTransform } from '../../engine/types';
 import { models } from '../../data/models';
 import { Model } from '../../data/types';
 import { MagnetScene3D } from '../MagnetScene3D';
 import { EditorToolbar } from './EditorToolbar';
 import { PartLibrary } from './PartLibrary';
-import { EditorCanvas } from './EditorCanvas';
+import { EditorCanvas, type ToolMode } from './EditorCanvas';
 import { PropertyPanel } from './PropertyPanel';
 import { StepTimeline } from './StepTimeline';
+import { DraftManagerModal } from './DraftManagerModal';
 import { useDraftStore } from './draftStore';
 
 export type Selection =
@@ -29,7 +33,6 @@ export type Selection =
   | { kind: 'step'; id: number }
   | { kind: 'none' };
 
-const DRAFT_KEY = 'editor-draft-default';
 const VALIDATION_DEBOUNCE_MS = 400;
 
 export function EditorWorkspace() {
@@ -38,29 +41,46 @@ export function EditorWorkspace() {
   const [validation, setValidation] = useState<EditorValidationResult | null>(null);
   const [currentStepId, setCurrentStepId] = useState<number | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ pieceId: string; ts: number } | null>(null);
+  const [fitRequest, setFitRequest] = useState<{ ts: number } | null>(null);
+  const [toolMode, setToolMode] = useState<ToolMode>('select');
   const [previewMode, setPreviewMode] = useState(false);
   const [message, setMessage] = useState<{ text: string; type: 'info' | 'error' | 'success' } | null>(null);
+  // P0-5: 草稿管理面板 + 自动保存指示
+  const [showDrafts, setShowDrafts] = useState(false);
+  const [draftVersion, setDraftVersion] = useState(0); // 触发草稿列表刷新
+  const [autoSaved, setAutoSaved] = useState(false);
 
   const project = history.current;
   const draft = useDraftStore();
+  const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
 
-  // 首次加载:尝试恢复草稿
+  // 首次加载:尝试恢复最近草稿
   useEffect(() => {
-    draft.load(DRAFT_KEY).then((p) => {
-      if (p) {
-        setHistory(replaceProject(history, p));
-        setMessage({ text: '已恢复上次草稿', type: 'info' });
-      }
-    });
+    const drafts = draft.list();
+    if (drafts.length > 0) {
+      // 加载最近的草稿
+      const p = draft.load(drafts[0].key);
+      Promise.resolve(p).then((proj) => {
+        if (proj) {
+          setHistory(replaceProject(history, proj));
+          setFitRequest({ ts: Date.now() });
+          setMessage({ text: `已恢复草稿: ${proj.metadata.name}`, type: 'info' });
+        }
+      });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 自动保存草稿(防抖)
+  // 自动保存草稿(防抖,键为 project.id)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      draft.save(DRAFT_KEY, project);
+      draft.save(project.id, project);
+      // P0-5: 显示准确的自动保存提示
+      setAutoSaved(true);
+      setDraftVersion((v) => v + 1);
+      setTimeout(() => setAutoSaved(false), 2000);
     }, 800);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
@@ -84,8 +104,19 @@ export function EditorWorkspace() {
     setHistory((h) => fn(h));
   }, []);
 
+  // 更新 current 但不入栈(用于拖拽期间的实时视觉更新)
+  const updatePieceTransformLive = useCallback((pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => {
+    setHistory((h) => ({
+      ...h,
+      current: { ...h.current, transforms: { ...h.current.transforms, [pieceId]: tf }, updatedAt: new Date().toISOString() },
+    }));
+  }, []);
+
   const handleAddPiece = useCallback((shape: any, color: any) => {
-    const { history: h, pieceId } = addPieceAction(history, shape, color);
+    // 放置到相机视野中心附近
+    const target = cameraTargetRef.current;
+    const placePos: [number, number, number] = [target.x, target.y, target.z];
+    const { history: h, pieceId } = addPieceAction(history, shape, color, placePos);
     setHistory(h);
     setSelection({ kind: 'piece', id: pieceId });
     setFocusRequest({ pieceId, ts: Date.now() });
@@ -118,12 +149,50 @@ export function EditorWorkspace() {
   }, [apply]);
 
   const handleSetPieceTransform = useCallback((pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => {
+    // P0-3: 移动已连接子零件时明确选择"调整连接角度"或"断开后移动",禁止静默忽略
+    const parentConn = findConnectionToParent(pieceId, project);
+    if (parentConn) {
+      const choice = confirm(
+        '该零件是已连接组件的成员。\n\n点击"确定"=调整连接角度(保持连接,根据新朝向更新二面角)\n点击"取消"=断开后移动(移除连接,零件变为自由)',
+      );
+      if (choice) {
+        // 调整连接角度
+        const newTf: PieceTransform = {
+          position: new THREE.Vector3(tf.position[0], tf.position[1], tf.position[2]),
+          quaternion: new THREE.Quaternion(tf.quaternion[0], tf.quaternion[1], tf.quaternion[2], tf.quaternion[3]),
+        };
+        const result = computeDihedralFromMovedTransform(pieceId, newTf, project);
+        if (result) {
+          apply((h) => updateConnectionAction(h, result.index, { dihedralDeg: result.dihedralDeg }));
+          setMessage({ text: `已调整连接角度为 ${result.dihedralDeg.toFixed(1)}°`, type: 'success' });
+        } else {
+          apply((h) => setPieceTransformAction(h, pieceId, tf));
+        }
+      } else {
+        // 断开后移动
+        apply((h) => removeConnectionAction(h, parentConn.index));
+        apply((h) => setPieceTransformAction(h, pieceId, tf));
+        setMessage({ text: '已断开连接并移动零件', type: 'info' });
+      }
+      return;
+    }
     apply((h) => setPieceTransformAction(h, pieceId, tf));
-  }, [apply]);
+  }, [apply, project]);
 
   const handleCreateConnection = useCallback((conn: any) => {
     apply((h) => createConnectionAction(h, conn));
-  }, [apply]);
+    // 自动把连接加入当前步骤
+    if (currentStepId !== null) {
+      apply((h) => {
+        // addConnectionToStepAction needs stepId and connection
+        // Import it dynamically to avoid circular deps complexity
+        const step = h.current.steps.find((s) => s.id === currentStepId);
+        if (step) step.addedConnections.push(conn);
+        return { ...h };
+      });
+      setMessage({ text: '已创建连接并加入当前步骤', type: 'success' });
+    }
+  }, [apply, currentStepId]);
 
   const handleUpdateConnection = useCallback((index: number, patch: any) => {
     apply((h) => updateConnectionAction(h, index, patch));
@@ -166,30 +235,97 @@ export function EditorWorkspace() {
     apply((h) => updateMetadataAction(h, patch));
   }, [apply]);
 
+  /* ----------------- P0-5: 草稿管理 ----------------- */
+  // 打开草稿(先保存当前,再加载目标)
+  const handleOpenDraft = useCallback(async (key: string) => {
+    await draft.save(project.id, project);
+    const loaded = draft.load(key);
+    Promise.resolve(loaded).then((p) => {
+      if (p) {
+        setHistory(replaceProject(history, p));
+        setSelection({ kind: 'none' });
+        setCurrentStepId(null);
+        setFitRequest({ ts: Date.now() });
+        setShowDrafts(false);
+        setMessage({ text: `已打开草稿: ${p.metadata.name}`, type: 'info' });
+      }
+    });
+  }, [draft, project, history]);
+
+  // 另存为:用新名称和新 id 保存当前项目副本
+  const handleSaveAs = useCallback(() => {
+    const name = prompt('请输入新方案名称:', `${project.metadata.name} 副本`);
+    if (!name?.trim()) return;
+    const newProject: EditorProject = {
+      ...JSON.parse(JSON.stringify(project)),
+      id: `proj-${Date.now()}`,
+      metadata: { ...project.metadata, name: name.trim() },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    draft.save(newProject.id, newProject);
+    setDraftVersion((v) => v + 1);
+    setMessage({ text: `已另存为草稿: ${name.trim()}`, type: 'success' });
+  }, [draft, project]);
+
+  // 删除草稿
+  const handleDeleteDraft = useCallback((key: string, name: string) => {
+    if (!confirm(`确定删除草稿"${name}"?此操作不可撤销。`)) return;
+    draft.remove(key);
+    setDraftVersion((v) => v + 1);
+    setMessage({ text: `已删除草稿: ${name}`, type: 'info' });
+  }, [draft]);
+
+  // 草稿列表(响应 draftVersion 变化刷新)
+  const draftsList = useMemo(() => draft.list(), [draft, draftVersion]);
+
   /* ----------------- 工具栏操作 ----------------- */
-  const handleNew = useCallback(() => {
-    if (!confirm('新建方案会清空当前编辑内容(已自动保存为草稿)。继续?')) return;
-    setHistory(replaceProject(history, createEmptyProject()));
+  const handleNew = useCallback(async () => {
+    if (!confirm('新建方案会清空当前编辑内容(当前草稿已自动保存)。继续?')) return;
+    // 先保存当前项目快照(确保不丢失)
+    await draft.save(project.id, project);
+    const newProject = createEmptyProject();
+    setHistory(replaceProject(history, newProject));
     setSelection({ kind: 'none' });
     setCurrentStepId(null);
     setValidation(null);
-  }, [history]);
+    setFitRequest({ ts: Date.now() });
+    setMessage({ text: '已新建方案,草稿已保存为独立条目', type: 'info' });
+  }, [history, project, draft]);
 
   const handleUndo = useCallback(() => setHistory((h) => undo(h)), []);
   const handleRedo = useCallback(() => setHistory((h) => redo(h)), []);
 
-  const handleImportExisting = useCallback((modelId: string) => {
+  // P1-7: 撤销/重做后修复悬空 selection
+  useEffect(() => {
+    if (selection.kind === 'piece') {
+      const exists = project.pieces.some((p) => p.id === selection.id);
+      if (!exists) setSelection({ kind: 'none' });
+    } else if (selection.kind === 'connection') {
+      if (selection.index < 0 || selection.index >= project.connections.length) {
+        setSelection({ kind: 'none' });
+      }
+    } else if (selection.kind === 'step') {
+      const exists = project.steps.some((s) => s.id === selection.id);
+      if (!exists) setSelection({ kind: 'none' });
+    }
+  }, [project, selection]);
+
+  const handleImportExisting = useCallback(async (modelId: string) => {
     const m = models.find((mm) => mm.id === modelId);
     if (!m) {
       setMessage({ text: `找不到模型: ${modelId}`, type: 'error' });
       return;
     }
+    // 先保存当前项目快照
+    await draft.save(project.id, project);
     const p = modelToProject(m);
     setHistory(replaceProject(history, p));
     setSelection({ kind: 'none' });
     setCurrentStepId(null);
+    setFitRequest({ ts: Date.now() });
     setMessage({ text: `已导入现有模型: ${m.name}`, type: 'success' });
-  }, [history]);
+  }, [history, project, draft]);
 
   const handleExport = useCallback(() => {
     const integrity = integrityCheck(project);
@@ -220,9 +356,12 @@ export function EditorWorkspace() {
         setMessage({ text: '导入失败: ' + (result.errors[0] || '无法解析'), type: 'error' });
         return;
       }
+      // 先保存当前项目快照
+      await draft.save(project.id, project);
       setHistory(replaceProject(history, result.project));
       setSelection({ kind: 'none' });
       setCurrentStepId(null);
+      setFitRequest({ ts: Date.now() });
       const warnings = result.warnings.length;
       setMessage({
         text: warnings > 0 ? `已导入方案(${warnings} 条迁移警告)` : '已导入方案',
@@ -231,7 +370,7 @@ export function EditorWorkspace() {
     } catch (e) {
       setMessage({ text: '导入失败: ' + (e as Error).message, type: 'error' });
     }
-  }, [history]);
+  }, [history, project, draft]);
 
   const handleValidateNow = useCallback(() => {
     setValidation(runValidation(project));
@@ -271,9 +410,26 @@ export function EditorWorkspace() {
         onExport={handleExport}
         onValidate={handleValidateNow}
         onPreview={() => setPreviewMode(true)}
+        onFitAll={() => setFitRequest({ ts: Date.now() })}
+        onShowDrafts={() => setShowDrafts(true)}
+        onSaveAs={handleSaveAs}
+        autoSaved={autoSaved}
         validationValid={validation?.valid}
         existingModels={models.map((m) => ({ id: m.id, name: m.name }))}
+        toolMode={toolMode}
+        onToolModeChange={setToolMode}
       />
+
+      {/* P0-5: 草稿管理面板 */}
+      {showDrafts && (
+        <DraftManagerModal
+          drafts={draftsList}
+          currentProjectId={project.id}
+          onOpen={handleOpenDraft}
+          onDelete={handleDeleteDraft}
+          onClose={() => setShowDrafts(false)}
+        />
+      )}
 
       {message && (
         <div
@@ -301,12 +457,16 @@ export function EditorWorkspace() {
           <EditorCanvas
             project={project}
             selection={selection}
+            toolMode={toolMode}
             onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
             onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
             onClearSelection={() => setSelection({ kind: 'none' })}
             focusRequest={focusRequest}
-            onMovePiece={handleSetPieceTransform}
+            fitRequest={fitRequest}
+            onMovePiece={updatePieceTransformLive}
+            onMovePieceCommit={handleSetPieceTransform}
             onCreateConnection={handleCreateConnection}
+            cameraTargetRef={cameraTargetRef}
           />
         </main>
 
@@ -328,6 +488,8 @@ export function EditorWorkspace() {
             onAddPieceToStep={handleAddPieceToStep}
             onUpdateStep={handleUpdateStep}
             onSetPieceTransform={handleSetPieceTransform}
+            onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
+            onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
           />
         </aside>
       </div>
@@ -354,26 +516,58 @@ export function EditorWorkspace() {
 /* ----------------- 预览模式(复用 MagnetScene3D,把 EditorProject 转回 Model) ----------------- */
 function PreviewMode({ project, onExit }: { project: EditorProject; onExit: () => void }) {
   const model = useMemo(() => projectToModel(project) as Model, [project]);
-  const [stepIdx, setStepIdx] = useState(-1);
+  // P1-8: 默认从第 1 步开始,提供"完整模型"入口
+  const [stepIdx, setStepIdx] = useState(0);
+  const [showFullModel, setShowFullModel] = useState(false);
+
+  const effectiveIdx = showFullModel ? -1 : stepIdx;
+  const hasSteps = model.steps.length > 0;
+  const atStart = !showFullModel && stepIdx <= 0;
+  const atEnd = !showFullModel && stepIdx >= model.steps.length - 1;
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-white">
-      <div className="flex items-center justify-between px-4 py-2 border-b">
-        <span className="font-semibold">用户端预览 - {project.metadata.name}</span>
-        <div className="flex gap-2">
-          <button onClick={() => setStepIdx(Math.max(-1, stepIdx - 1))} className="px-3 py-1 bg-gray-100 rounded">上一步</button>
+    <div className="flex flex-col h-screen w-screen bg-white overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 border-b flex-shrink-0">
+        <span className="font-semibold truncate">用户端预览 - {project.metadata.name}</span>
+        <div className="flex gap-2 flex-shrink-0">
+          <button
+            onClick={() => { setShowFullModel(false); setStepIdx(0); }}
+            disabled={!showFullModel && stepIdx === 0}
+            className={`px-3 py-1 rounded text-sm ${(!showFullModel && stepIdx === 0) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            回到第1步
+          </button>
+          <button
+            onClick={() => setStepIdx(Math.max(0, stepIdx - 1))}
+            disabled={atStart}
+            className={`px-3 py-1 rounded text-sm ${atStart ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            上一步
+          </button>
           <span className="px-3 py-1 text-sm text-gray-600">
-            {stepIdx < 0 ? '完成预览' : `${stepIdx + 1} / ${model.steps.length}`}
+            {showFullModel ? '完整模型' : hasSteps ? `${stepIdx + 1} / ${model.steps.length}` : '无步骤'}
           </span>
-          <button onClick={() => setStepIdx(Math.min(model.steps.length - 1, stepIdx + 1))} className="px-3 py-1 bg-gray-100 rounded">下一步</button>
-          <button onClick={onExit} className="px-3 py-1 bg-blue-500 text-white rounded">退出预览</button>
+          <button
+            onClick={() => { if (showFullModel) { setShowFullModel(false); setStepIdx(model.steps.length - 1); } else { setStepIdx(Math.min(model.steps.length - 1, stepIdx + 1)); } }}
+            disabled={atEnd && !showFullModel}
+            className={`px-3 py-1 rounded text-sm ${(atEnd && !showFullModel) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            下一步
+          </button>
+          <button
+            onClick={() => setShowFullModel(!showFullModel)}
+            className={`px-3 py-1 rounded text-sm ${showFullModel ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
+          >
+            {showFullModel ? '退出完整模型' : '完整模型'}
+          </button>
+          <button onClick={onExit} className="px-3 py-1 bg-blue-500 text-white rounded text-sm">退出预览</button>
         </div>
       </div>
-      <div className="flex-1">
-        <MagnetScene3D model={model} stepIndex={stepIdx} highlightNew interactive />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <MagnetScene3D model={model} stepIndex={effectiveIdx} highlightNew interactive />
       </div>
-      {stepIdx >= 0 && model.steps[stepIdx] && (
-        <div className="p-4 border-t bg-gray-50">
+      {!showFullModel && hasSteps && model.steps[stepIdx] && (
+        <div className="p-4 border-t bg-gray-50 flex-shrink-0">
           <h3 className="font-semibold">{model.steps[stepIdx].title}</h3>
           <p className="text-sm text-gray-600 mt-1">{model.steps[stepIdx].description}</p>
         </div>

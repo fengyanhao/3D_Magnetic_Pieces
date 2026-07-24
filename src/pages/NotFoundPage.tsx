@@ -1,39 +1,37 @@
-import { ArrowLeft, Home } from 'lucide-react';
-import { Header } from '../components/Header';
+import { useNavigate } from 'react-router-dom';
+import { Home, ArrowLeft, Search } from 'lucide-react';
 
 export function NotFoundPage() {
+  const navigate = useNavigate();
+
   return (
-    <div className="container min-h-screen flex flex-col">
-      <Header title="页面未找到" />
-      
-      <main className="flex-1 flex flex-col items-center justify-center px-6 safe-area-bottom">
+    <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-10 py-12 md:py-20">
+      <div className="flex flex-col items-center justify-center text-center">
         <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-6">
-          <span className="text-4xl font-bold text-gray-300">404</span>
+          <Search className="w-12 h-12 text-gray-400" />
         </div>
-        
-        <h1 className="text-2xl font-bold text-gray-800 mb-2">哎呀，页面丢了！</h1>
-        <p className="text-gray-500 text-center mb-8">
-          我们找不到您要访问的页面。<br />
-          可能是地址有误，或者页面已经移动了。
+        <h1 className="text-6xl font-bold text-gray-300 mb-2">404</h1>
+        <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-2">页面未找到</h2>
+        <p className="text-gray-500 max-w-md mb-8">
+          您访问的页面可能已被移除、更名，或者暂时不可用。
         </p>
-        
-        <div className="flex flex-col gap-3 w-full max-w-xs">
-          <a
-            href="/"
-            className="flex items-center justify-center gap-2 bg-primary-500 text-white py-3 rounded-xl font-medium transition-colors hover:bg-primary-600"
+        <div className="flex flex-col sm:flex-row gap-3 w-full max-w-xs sm:max-w-none sm:w-auto">
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center justify-center gap-2 bg-primary-500 text-white py-3 px-6 rounded-xl font-medium transition-colors hover:bg-primary-600"
           >
             <Home className="w-5 h-5" />
             返回首页
-          </a>
+          </button>
           <button
-            onClick={() => window.history.back()}
-            className="flex items-center justify-center gap-2 bg-gray-100 text-gray-600 py-3 rounded-xl font-medium transition-colors hover:bg-gray-200"
+            onClick={() => navigate(-1)}
+            className="flex items-center justify-center gap-2 bg-gray-100 text-gray-600 py-3 px-6 rounded-xl font-medium transition-colors hover:bg-gray-200"
           >
             <ArrowLeft className="w-5 h-5" />
             返回上一页
           </button>
         </div>
-      </main>
+      </div>
     </div>
   );
 }

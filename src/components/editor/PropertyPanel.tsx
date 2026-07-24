@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import * as THREE from 'three';
 import { EditorProject } from '../../editor/types';
 import { EditorValidationResult, categoryLabels, suggestFix, EditorValidationIssue } from '../../editor/validate';
@@ -6,6 +6,9 @@ import { buildMaterialInventory } from '../../editor/serialization';
 import { ALL_COLORS, colorLabels } from '../../editor/shapeInfo';
 import { MagnetColor, Theme, Difficulty } from '../../data/types';
 import type { Selection } from './EditorWorkspace';
+
+let fieldIdCounter = 0;
+const nextFieldId = () => `pf-${++fieldIdCounter}`;
 
 interface Props {
   project: EditorProject;
@@ -23,6 +26,9 @@ interface Props {
   onAddPieceToStep: (stepId: number, pieceId: string) => void;
   onUpdateStep: (stepId: number, patch: any) => void;
   onSetPieceTransform: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  // P1-10: 大纲列表选择回调(键盘可达)
+  onSelectPiece?: (id: string) => void;
+  onSelectConnection?: (index: number) => void;
 }
 
 export function PropertyPanel(props: Props) {
@@ -68,24 +74,85 @@ function TabBtn({ active, onClick, children }: { active: boolean; onClick: () =>
 function PropsTab(props: Props) {
   const { project, selection } = props;
 
-  if (selection.kind === 'none') {
-    return (
-      <div className="p-4 space-y-3">
-        <p className="text-xs text-gray-400">未选中对象。点击 3D 画布中的零件或下方步骤来编辑。</p>
-        <MaterialList project={project} />
+  return (
+    <div className="flex flex-col h-full">
+      {/* P1-10: 键盘可达的零件/连接大纲列表 */}
+      <OutlineList {...props} />
+      <div className="flex-1 overflow-y-auto">
+        {selection.kind === 'none' && (
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-gray-400">未选中对象。点击上方列表或 3D 画布中的零件/连接来编辑。</p>
+            <MaterialList project={project} />
+          </div>
+        )}
+        {selection.kind === 'piece' && <PieceProps {...props} />}
+        {selection.kind === 'connection' && <ConnectionProps {...props} />}
+        {selection.kind === 'step' && <StepProps {...props} />}
       </div>
-    );
-  }
+    </div>
+  );
+}
 
-  if (selection.kind === 'piece') {
-    return <PieceProps {...props} />;
-  }
+/** P1-10: 键盘可达的零件/连接大纲列表。 */
+function OutlineList({ project, selection, onSelectPiece, onSelectConnection }: Props) {
+  const [expanded, setExpanded] = useState(true);
+  if (project.pieces.length === 0 && project.connections.length === 0) return null;
 
-  if (selection.kind === 'connection') {
-    return <ConnectionProps {...props} />;
-  }
+  const pieceLabel = (p: EditorProject['pieces'][number]) => {
+    const part = project.parts.find((pp) => pp.id === p.partId);
+    return `${part?.shape ?? '?'} · ${part?.color ?? ''}`;
+  };
 
-  return <StepProps {...props} />;
+  return (
+    <div className="border-b">
+      <button
+        onClick={() => setExpanded((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-1.5 text-xs font-semibold text-gray-700 bg-gray-50 hover:bg-gray-100"
+        aria-expanded={expanded}
+      >
+        <span>大纲({project.pieces.length} 零件 / {project.connections.length} 连接)</span>
+        <span className="text-gray-400">{expanded ? '▾' : '▸'}</span>
+      </button>
+      {expanded && (
+        <ul role="tree" aria-label="零件与连接大纲" className="max-h-32 overflow-y-auto text-xs">
+          {project.pieces.map((p, i) => {
+            const isSelected = selection.kind === 'piece' && selection.id === p.id;
+            return (
+              <li key={p.id} role="treeitem" aria-selected={isSelected}>
+                <button
+                  onClick={() => onSelectPiece?.(p.id)}
+                  className={`w-full text-left px-3 py-1 flex items-center gap-2 ${
+                    isSelected ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-50 text-gray-700'
+                  }`}
+                  title={p.id}
+                >
+                  <span className="inline-block w-4 text-gray-400">{i + 1}.</span>
+                  <span className="truncate">{pieceLabel(p)}</span>
+                </button>
+              </li>
+            );
+          })}
+          {project.connections.map((c, i) => {
+            const isSelected = selection.kind === 'connection' && selection.index === i;
+            return (
+              <li key={`c-${i}`} role="treeitem" aria-selected={isSelected}>
+                <button
+                  onClick={() => onSelectConnection?.(i)}
+                  className={`w-full text-left px-3 py-1 flex items-center gap-2 ${
+                    isSelected ? 'bg-amber-100 text-amber-700' : 'hover:bg-gray-50 text-gray-700'
+                  }`}
+                  title={`连接 ${c.pieceA}:${c.portA} → ${c.pieceB}:${c.portB}`}
+                >
+                  <span className="inline-block w-4 text-gray-400">↯</span>
+                  <span className="truncate">连接 #{i} ({c.dihedralDeg}°)</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function MaterialList({ project }: { project: EditorProject }) {
@@ -206,12 +273,14 @@ function PieceProps(props: Props) {
         <div className="text-xs text-gray-700">{shape}</div>
       </div>
       <div>
-        <div className="text-xs text-gray-500">颜色</div>
-        <div className="grid grid-cols-6 gap-1 mt-1">
+        <span id="piece-color-label" className="text-xs text-gray-500">颜色</span>
+        <div className="grid grid-cols-6 gap-1 mt-1" role="group" aria-labelledby="piece-color-label">
           {ALL_COLORS.map((c) => (
             <button
               key={c}
               onClick={() => onSetPieceColor(piece.id, c)}
+              aria-pressed={part.color === c}
+              aria-label={colorLabels[c]}
               className={`w-7 h-7 rounded border-2 ${part.color === c ? 'border-blue-500' : 'border-gray-200'}`}
               style={{ background: colorSwatch(c) }}
               title={colorLabels[c]}
@@ -220,48 +289,56 @@ function PieceProps(props: Props) {
         </div>
       </div>
       {/* 位置 */}
-      <div>
-        <div className="text-xs text-gray-500 mb-1">位置 (X / Y / Z)</div>
+      <fieldset>
+        <legend className="text-xs text-gray-500 mb-1">位置 (X / Y / Z)</legend>
         <div className="grid grid-cols-3 gap-1">
-          {(['x', 'y', 'z'] as const).map((axis) => (
-            <label key={axis} className="block">
-              <span className="text-[10px] text-gray-400">{axis.toUpperCase()}</span>
-              <input
-                type="number"
-                step={0.1}
-                value={posDisplay[axis]}
-                onChange={(e) => setPosDraft({ ...posDisplay, [axis]: e.target.value })}
-                onBlur={commitPosition}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitPosition(); }}
-                className="w-full px-1 py-0.5 text-xs border rounded font-mono"
-              />
-            </label>
-          ))}
+          {(['x', 'y', 'z'] as const).map((axis) => {
+            const fid = `pos-${piece.id}-${axis}`;
+            return (
+              <div key={axis} className="block">
+                <label htmlFor={fid} className="text-[10px] text-gray-400">{axis.toUpperCase()}</label>
+                <input
+                  id={fid}
+                  type="number"
+                  step={0.1}
+                  value={posDisplay[axis]}
+                  onChange={(e) => setPosDraft({ ...posDisplay, [axis]: e.target.value })}
+                  onBlur={commitPosition}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitPosition(); }}
+                  className="w-full px-1 py-0.5 text-xs border rounded font-mono"
+                />
+              </div>
+            );
+          })}
         </div>
-      </div>
+      </fieldset>
       {/* 旋转(欧拉角 XYZ 度数) */}
-      <div>
+      <fieldset>
         <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-gray-500">旋转 (度, XYZ)</span>
+          <legend className="text-xs text-gray-500">旋转 (度, XYZ)</legend>
           <button onClick={resetRotation} className="text-[10px] text-blue-500 hover:underline">重置</button>
         </div>
         <div className="grid grid-cols-3 gap-1">
-          {(['x', 'y', 'z'] as const).map((axis) => (
-            <label key={axis} className="block">
-              <span className="text-[10px] text-gray-400">{axis.toUpperCase()}</span>
-              <input
-                type="number"
-                step={15}
-                value={rotDisplay[axis]}
-                onChange={(e) => setRotDraft({ ...rotDisplay, [axis]: e.target.value })}
-                onBlur={commitRotation}
-                onKeyDown={(e) => { if (e.key === 'Enter') commitRotation(); }}
-                className="w-full px-1 py-0.5 text-xs border rounded font-mono"
-              />
-            </label>
-          ))}
+          {(['x', 'y', 'z'] as const).map((axis) => {
+            const fid = `rot-${piece.id}-${axis}`;
+            return (
+              <div key={axis} className="block">
+                <label htmlFor={fid} className="text-[10px] text-gray-400">{axis.toUpperCase()}</label>
+                <input
+                  id={fid}
+                  type="number"
+                  step={15}
+                  value={rotDisplay[axis]}
+                  onChange={(e) => setRotDraft({ ...rotDisplay, [axis]: e.target.value })}
+                  onBlur={commitRotation}
+                  onKeyDown={(e) => { if (e.key === 'Enter') commitRotation(); }}
+                  className="w-full px-1 py-0.5 text-xs border rounded font-mono"
+                />
+              </div>
+            );
+          })}
         </div>
-        <div className="flex flex-wrap gap-1 mt-1">
+        <div className="flex flex-wrap gap-1 mt-1" role="group" aria-label="旋转快捷按钮">
           <button onClick={() => rotateBy('y', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="R">Y +15°</button>
           <button onClick={() => rotateBy('y', -15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="T">Y -15°</button>
           <button onClick={() => rotateBy('x', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="F">X +15°</button>
@@ -269,7 +346,7 @@ function PieceProps(props: Props) {
           <button onClick={() => rotateBy('z', 15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="V">Z +15°</button>
           <button onClick={() => rotateBy('z', -15)} className="text-[10px] px-1.5 py-0.5 border rounded hover:bg-gray-50" title="B">Z -15°</button>
         </div>
-      </div>
+      </fieldset>
       <div className="text-xs">
         <span className="text-gray-500">根零件:</span>
         <span className="ml-1">{piece.isRoot ? '是' : '否'}</span>
@@ -297,6 +374,8 @@ function ConnectionProps(props: Props) {
   const { project, selection, onUpdateConnection, onRemoveConnection } = props;
   const idx = (selection as any).index as number;
   const conn = project.connections[idx];
+  const dihedralId = useMemo(() => nextFieldId(), []);
+  const flipId = useMemo(() => nextFieldId(), []);
   if (!conn) return <p className="text-xs text-gray-400 p-4">连接不存在</p>;
 
   return (
@@ -306,8 +385,9 @@ function ConnectionProps(props: Props) {
         {conn.pieceA}:{conn.portA} → {conn.pieceB}:{conn.portB}
       </div>
       <div>
-        <label className="text-xs text-gray-500">二面角(deg): {conn.dihedralDeg}</label>
+        <label htmlFor={dihedralId} className="text-xs text-gray-500">二面角(deg): {conn.dihedralDeg}</label>
         <input
+          id={dihedralId}
           type="range"
           min={-180}
           max={180}
@@ -315,21 +395,25 @@ function ConnectionProps(props: Props) {
           value={conn.dihedralDeg}
           onChange={(e) => onUpdateConnection(idx, { dihedralDeg: Number(e.target.value) })}
           className="w-full"
+          aria-valuetext={`${conn.dihedralDeg} 度`}
         />
-        <div className="flex gap-1 mt-1">
+        <div className="flex gap-1 mt-1" role="group" aria-label="二面角预设">
           {[0, 45, 90, -90, 135, 180].map((d) => (
             <button
               key={d}
               onClick={() => onUpdateConnection(idx, { dihedralDeg: d })}
+              aria-pressed={conn.dihedralDeg === d}
               className="text-[10px] px-1 border rounded hover:bg-gray-50"
             >{d}°</button>
           ))}
         </div>
       </div>
       <div>
-        <label className="text-xs text-gray-500">flip(翻转方向)</label>
+        <label htmlFor={flipId} className="text-xs text-gray-500">flip(翻转方向)</label>
         <button
+          id={flipId}
           onClick={() => onUpdateConnection(idx, { flip: !conn.flip })}
+          aria-pressed={conn.flip}
           className={`ml-2 text-xs px-2 py-0.5 rounded ${conn.flip ? 'bg-blue-500 text-white' : 'bg-gray-100'}`}
         >
           {conn.flip ? 'ON' : 'OFF'}
@@ -351,13 +435,17 @@ function StepProps(props: Props) {
   const { project, selection, onUpdateStep } = props;
   const stepId = (selection as any).id as number;
   const step = project.steps.find((s) => s.id === stepId);
+  const titleId = useMemo(() => nextFieldId(), []);
+  const descId = useMemo(() => nextFieldId(), []);
+  const guideId = useMemo(() => nextFieldId(), []);
   if (!step) return <p className="text-xs text-gray-400 p-4">步骤不存在</p>;
 
   return (
     <div className="p-3 space-y-3">
       <div>
-        <label className="text-xs text-gray-500">标题</label>
+        <label htmlFor={titleId} className="text-xs text-gray-500">标题</label>
         <input
+          id={titleId}
           type="text"
           value={step.title}
           onChange={(e) => onUpdateStep(stepId, { title: e.target.value })}
@@ -366,8 +454,9 @@ function StepProps(props: Props) {
         />
       </div>
       <div>
-        <label className="text-xs text-gray-500">教学说明</label>
+        <label htmlFor={descId} className="text-xs text-gray-500">教学说明</label>
         <textarea
+          id={descId}
           value={step.description}
           onChange={(e) => onUpdateStep(stepId, { description: e.target.value })}
           className="w-full mt-0.5 px-2 py-1 text-sm border rounded"
@@ -376,8 +465,9 @@ function StepProps(props: Props) {
         />
       </div>
       <div>
-        <label className="text-xs text-gray-500">家长引导</label>
+        <label htmlFor={guideId} className="text-xs text-gray-500">家长引导</label>
         <input
+          id={guideId}
           type="text"
           value={step.parentGuide}
           onChange={(e) => onUpdateStep(stepId, { parentGuide: e.target.value })}
@@ -471,26 +561,35 @@ function InfoTab({ project, onUpdateMetadata }: {
   onUpdateMetadata: (patch: Partial<EditorProject['metadata']>) => void;
 }) {
   const m = project.metadata;
+  // P1-10: 为每个字段生成稳定 id 供 label 关联
+  const ids = useMemo(() => ({
+    name: nextFieldId(), desc: nextFieldId(), diff: nextFieldId(), theme: nextFieldId(),
+    minAge: nextFieldId(), maxAge: nextFieldId(), time: nextFieldId(), mode: nextFieldId(),
+    tags: nextFieldId(), tips: nextFieldId(), safety: nextFieldId(), author: nextFieldId(), ver: nextFieldId(),
+  }), []);
   return (
     <div className="p-3 space-y-3">
-      <Field label="方案名称">
+      <Field label="方案名称" htmlFor={ids.name}>
         <input
+          id={ids.name}
           type="text"
           value={m.name}
           onChange={(e) => onUpdateMetadata({ name: e.target.value })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="简介">
+      <Field label="简介" htmlFor={ids.desc}>
         <textarea
+          id={ids.desc}
           value={m.description}
           onChange={(e) => onUpdateMetadata({ description: e.target.value })}
           className="w-full px-2 py-1 text-sm border rounded"
           rows={2}
         />
       </Field>
-      <Field label="难度">
+      <Field label="难度" htmlFor={ids.diff}>
         <select
+          id={ids.diff}
           value={m.difficulty}
           onChange={(e) => onUpdateMetadata({ difficulty: e.target.value as Difficulty })}
           className="w-full px-2 py-1 text-sm border rounded"
@@ -500,8 +599,9 @@ function InfoTab({ project, onUpdateMetadata }: {
           <option value="hard">困难</option>
         </select>
       </Field>
-      <Field label="主题">
+      <Field label="主题" htmlFor={ids.theme}>
         <select
+          id={ids.theme}
           value={m.theme}
           onChange={(e) => onUpdateMetadata({ theme: e.target.value as Theme })}
           className="w-full px-2 py-1 text-sm border rounded"
@@ -515,16 +615,18 @@ function InfoTab({ project, onUpdateMetadata }: {
         </select>
       </Field>
       <div className="grid grid-cols-2 gap-2">
-        <Field label="最小年龄">
+        <Field label="最小年龄" htmlFor={ids.minAge}>
           <input
+            id={ids.minAge}
             type="number"
             value={m.minAge}
             onChange={(e) => onUpdateMetadata({ minAge: Number(e.target.value) })}
             className="w-full px-2 py-1 text-sm border rounded"
           />
         </Field>
-        <Field label="最大年龄">
+        <Field label="最大年龄" htmlFor={ids.maxAge}>
           <input
+            id={ids.maxAge}
             type="number"
             value={m.maxAge}
             onChange={(e) => onUpdateMetadata({ maxAge: Number(e.target.value) })}
@@ -532,16 +634,18 @@ function InfoTab({ project, onUpdateMetadata }: {
           />
         </Field>
       </div>
-      <Field label="预计搭建时间">
+      <Field label="预计搭建时间" htmlFor={ids.time}>
         <input
+          id={ids.time}
           type="text"
           value={m.estimatedTime}
           onChange={(e) => onUpdateMetadata({ estimatedTime: e.target.value })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="构建模式">
+      <Field label="构建模式" htmlFor={ids.mode}>
         <select
+          id={ids.mode}
           value={m.buildMode}
           onChange={(e) => onUpdateMetadata({ buildMode: e.target.value as any })}
           className="w-full px-2 py-1 text-sm border rounded"
@@ -551,40 +655,45 @@ function InfoTab({ project, onUpdateMetadata }: {
           <option value="standing">standing(站立)</option>
         </select>
       </Field>
-      <Field label="标签(逗号分隔)">
+      <Field label="标签(逗号分隔)" htmlFor={ids.tags}>
         <input
+          id={ids.tags}
           type="text"
           value={m.tags.join(', ')}
           onChange={(e) => onUpdateMetadata({ tags: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="教学提示(逗号分隔)">
+      <Field label="教学提示(逗号分隔)" htmlFor={ids.tips}>
         <input
+          id={ids.tips}
           type="text"
           value={m.teachingTips.join(', ')}
           onChange={(e) => onUpdateMetadata({ teachingTips: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="安全提示(逗号分隔)">
+      <Field label="安全提示(逗号分隔)" htmlFor={ids.safety}>
         <input
+          id={ids.safety}
           type="text"
           value={m.safetyTips.join(', ')}
           onChange={(e) => onUpdateMetadata({ safetyTips: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="作者">
+      <Field label="作者" htmlFor={ids.author}>
         <input
+          id={ids.author}
           type="text"
           value={m.author}
           onChange={(e) => onUpdateMetadata({ author: e.target.value })}
           className="w-full px-2 py-1 text-sm border rounded"
         />
       </Field>
-      <Field label="数据版本">
+      <Field label="数据版本" htmlFor={ids.ver}>
         <input
+          id={ids.ver}
           type="text"
           value={m.dataVersion}
           onChange={(e) => onUpdateMetadata({ dataVersion: e.target.value })}
@@ -601,10 +710,10 @@ function InfoTab({ project, onUpdateMetadata }: {
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, htmlFor, children }: { label: string; htmlFor?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="text-xs text-gray-500">{label}</label>
+      <label htmlFor={htmlFor} className="text-xs text-gray-500">{label}</label>
       {children}
     </div>
   );

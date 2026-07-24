@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * 编辑器 MVP 端到端测试。
+ * 编辑器 MVP 端到端测试(仅测 DOM)。
  * 覆盖用户要求的 12 步流程中可在 DOM 层验证的部分:
  * 1. 进入 /editor
  * 2. 新建方案
@@ -16,6 +16,9 @@ import { test, expect } from '@playwright/test';
  *
  * 注:3D 画布的点击/拖拽吸附在 WebGL canvas 中无 DOM 元素,
  * 此处通过 DOM UI(零件库按钮、属性面板、步骤时间轴)验证流程。
+ *
+ * 画布核心逻辑(相机稳定、三轴变换、磁吸、连接选中、撤销事务、曲边渲染)
+ * 由 editor-canvas-integration.test.ts 覆盖。
  */
 
 // 每个测试前清理 localStorage,避免草稿自动恢复导致的状态污染

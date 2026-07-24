@@ -1,24 +1,31 @@
 import { useRef, useMemo, useEffect, useCallback, useState } from 'react';
-import { Canvas, useThree, useFrame } from '@react-three/fiber';
-import { OrbitControls, ContactShadows, Line } from '@react-three/drei';
+import { Canvas, useThree } from '@react-three/fiber';
+import { OrbitControls, ContactShadows, Line, TransformControls, GizmoHelper, GizmoViewcube } from '@react-three/drei';
 import * as THREE from 'three';
 import { MagnetColor } from '../../data/types';
 import { getShapeDef } from '../../engine/shapes';
 import { Connection } from '../../engine/types';
 import { MagnetPieceMesh } from '../magnet3d/primitives';
 import { EditorProject } from '../../editor/types';
-import { getDisplayTransforms, findCompatibleTargets, buildPortUsage } from '../../editor/snap';
+import { getDisplayTransforms, findCompatibleTargets, buildPortUsage, findBestSnapCandidate } from '../../editor/snap';
+import { computeFitCamera, applyFitResult, pieceWorldVertices } from '../magnet3d/cameraUtils';
 import type { Selection } from './EditorWorkspace';
+
+export type ToolMode = 'select' | 'move' | 'rotate' | 'snap';
 
 interface Props {
   project: EditorProject;
   selection: Selection;
+  toolMode: ToolMode;
   onSelectPiece: (id: string) => void;
   onSelectConnection: (index: number) => void;
   onClearSelection: () => void;
   focusRequest: { pieceId: string; ts: number } | null;
+  fitRequest: { ts: number } | null;
   onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  onMovePieceCommit: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
   onCreateConnection: (conn: Connection) => void;
+  cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
 }
 
 interface DefaultCameraState {
@@ -28,85 +35,30 @@ interface DefaultCameraState {
   target: THREE.Vector3;
 }
 
-/**
- * 拖拽控制器:在 Y=0 水平面投影鼠标位置,实时更新选中零件位置。
- * 拖拽期间禁用 OrbitControls,松开后恢复。
- */
-function DragController({
-  transforms,
-  onMovePiece,
-  draggingRef,
-  controlsRef,
-}: {
-  transforms: Record<string, { position: THREE.Vector3; quaternion: THREE.Quaternion }>;
-  onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
-  draggingRef: React.MutableRefObject<{ pieceId: string; offset: THREE.Vector3 } | null>;
-  controlsRef: React.MutableRefObject<any>;
-}) {
-  const { camera, pointer } = useThree();
-  const planeRef = useRef(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0));
-  const raycasterRef = useRef(new THREE.Raycaster());
-  const lastDragPosRef = useRef<THREE.Vector3 | null>(null);
-
-  // 拖拽中:每帧把鼠标投影到拖拽平面,更新位置
-  useFrame(() => {
-    const drag = draggingRef.current;
-    if (!drag) return;
-    const tf = transforms[drag.pieceId];
-    if (!tf) return;
-
-    raycasterRef.current.setFromCamera(pointer, camera);
-    const hit = new THREE.Vector3();
-    if (!raycasterRef.current.ray.intersectPlane(planeRef.current, hit)) return;
-
-    // 拖拽平面在零件当前 Y 高度(保持 Y 不变,只在 XZ 平面移动)
-    planeRef.current.constant = -tf.position.y;
-
-    if (!lastDragPosRef.current) {
-      lastDragPosRef.current = hit.clone();
-      return;
-    }
-    // 计算位移增量,避免瞬移
-    const delta = hit.clone().sub(lastDragPosRef.current);
-    lastDragPosRef.current = hit.clone();
-
-    // 应用偏移
-    const newPos = tf.position.clone().add(delta);
-    onMovePiece(drag.pieceId, {
-      position: [newPos.x, newPos.y, newPos.z],
-      quaternion: [tf.quaternion.x, tf.quaternion.y, tf.quaternion.z, tf.quaternion.w],
-    });
-  });
-
-  // 监听指针抬起
-  useEffect(() => {
-    const onPointerUp = () => {
-      if (draggingRef.current) {
-        draggingRef.current = null;
-        lastDragPosRef.current = null;
-        if (controlsRef.current) controlsRef.current.enabled = true;
-        document.body.style.cursor = 'grab';
-      }
-    };
-    window.addEventListener('pointerup', onPointerUp);
-    return () => window.removeEventListener('pointerup', onPointerUp);
-  }, [draggingRef, controlsRef]);
-
-  return null;
-}
+const SNAP_PIXEL_THRESHOLD = 28; // 屏幕像素阈值
 
 function SceneContent({
-  project, selection, onSelectPiece, focusRequest, onMovePiece,
-  defaultCameraStateRef, resetViewRef,
+  project, selection, toolMode, onSelectPiece, onSelectConnection, focusRequest, fitRequest,
+  onMovePiece, onMovePieceCommit, onCreateConnection, defaultCameraStateRef, resetViewRef,
+  fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef,
 }: {
   project: EditorProject;
   selection: Selection;
+  toolMode: ToolMode;
   onSelectPiece: (id: string) => void;
+  onSelectConnection: (index: number) => void;
   onClearSelection: () => void;
   focusRequest: { pieceId: string; ts: number } | null;
+  fitRequest: { ts: number } | null;
   onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  onMovePieceCommit: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  onCreateConnection: (conn: Connection) => void;
   defaultCameraStateRef: React.MutableRefObject<DefaultCameraState | null>;
   resetViewRef: React.MutableRefObject<(() => void) | null>;
+  fitAllRef: React.MutableRefObject<(() => void) | null>;
+  fitSelectionRef: React.MutableRefObject<(() => void) | null>;
+  setViewRef: React.MutableRefObject<((view: string) => void) | null>;
+  cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
 }) {
   const partMap = useMemo(() => {
     const m: Record<string, EditorProject['parts'][number]> = {};
@@ -122,7 +74,6 @@ function SceneContent({
   const transforms = useMemo(() => getDisplayTransforms(project), [project]);
   const portUsage = useMemo(() => buildPortUsage(project), [project.connections]);
 
-  // 兼容目标端口(选中 piece 时高亮)
   const compatibleTargets = useMemo(() => {
     if (selection.kind !== 'piece') return new Set<string>();
     const set = new Set<string>();
@@ -133,50 +84,17 @@ function SceneContent({
   }, [selection, project]);
 
   const controlsRef = useRef<any>(null);
+  const transformControlsRef = useRef<any>(null);
   const { camera, size } = useThree();
-
-  // 拖拽状态
-  const draggingRef = useRef<{ pieceId: string; offset: THREE.Vector3 } | null>(null);
   const [hoveredPiece, setHoveredPiece] = useState<string | null>(null);
+  const [snapPreview, setSnapPreview] = useState<{ position: [number, number, number]; quaternion: [number, number, number, number] } | null>(null);
+  const dragStateRef = useRef<{ pieceId: string; startPos: THREE.Vector3; startQuat: THREE.Quaternion; committed: boolean } | null>(null);
 
-  const fitCameraToPiece = useCallback((pieceId: string) => {
-    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
-    const ortho = camera as THREE.OrthographicCamera;
-    const tf = transforms[pieceId];
-    const piece = pieceMap[pieceId];
-    if (!tf || !piece) return;
-    const part = partMap[piece.partId];
-    if (!part) return;
-    const shape = getShapeDef(part.shape);
-    if (!shape) return;
+  const selectedPieceId = selection.kind === 'piece' ? selection.id : null;
 
-    const matrix = new THREE.Matrix4().compose(tf.position, tf.quaternion, new THREE.Vector3(1, 1, 1));
-    const box = new THREE.Box3();
-    const halfThick = shape.thickness / 2;
-    for (const v of shape.vertices) {
-      for (const z of [-halfThick, halfThick]) {
-        box.expandByPoint(new THREE.Vector3(v.x, v.y, z).applyMatrix4(matrix));
-      }
-    }
-    const center = box.getCenter(new THREE.Vector3());
-    const dim = box.getSize(new THREE.Vector3());
-    const maxDim = Math.max(dim.x, dim.y, dim.z);
-    const distance = maxDim * 1.5 + 4;
-    ortho.position.set(center.x + distance * 0.7, center.y + distance * 0.7, center.z + distance * 0.7);
-    ortho.lookAt(center);
-    ortho.zoom = 50 / (maxDim + 1);
-    ortho.updateProjectionMatrix();
-    if (controlsRef.current) {
-      controlsRef.current.target.copy(center);
-      controlsRef.current.update();
-    }
-  }, [camera, transforms, pieceMap, partMap]);
-
-  const fitCameraToModel = useCallback(() => {
-    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
-    const ortho = camera as THREE.OrthographicCamera;
-    if (project.pieces.length === 0) return;
-    const worldVerts: THREE.Vector3[] = [];
+  /* ---- 相机拟合:复用 MagnetScene3D 的投影算法 ---- */
+  const computeAllWorldVerts = useCallback((): THREE.Vector3[] => {
+    const out: THREE.Vector3[] = [];
     for (const p of project.pieces) {
       const tf = transforms[p.id];
       const piece = pieceMap[p.id];
@@ -185,92 +103,145 @@ function SceneContent({
       if (!part) continue;
       const shape = getShapeDef(part.shape);
       if (!shape) continue;
-      const matrix = new THREE.Matrix4().compose(tf.position, tf.quaternion, new THREE.Vector3(1, 1, 1));
-      const halfThick = shape.thickness / 2;
-      for (const v of shape.vertices) {
-        for (const z of [-halfThick, halfThick]) {
-          worldVerts.push(new THREE.Vector3(v.x, v.y, z).applyMatrix4(matrix));
-        }
-      }
+      out.push(...pieceWorldVertices(shape, tf.position, tf.quaternion));
     }
-    if (worldVerts.length === 0) return;
+    return out;
+  }, [project.pieces, transforms, pieceMap, partMap]);
+
+  const fitAll = useCallback(() => {
+    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
+    const verts = computeAllWorldVerts();
+    if (verts.length === 0) return;
+    const result = computeFitCamera({
+      worldVertices: verts,
+      camera: camera as THREE.OrthographicCamera,
+      controls: controlsRef.current,
+      size,
+    });
+    if (result) {
+      applyFitResult(camera as THREE.OrthographicCamera, result, controlsRef.current);
+      defaultCameraStateRef.current = result;
+      cameraTargetRef.current.copy(result.target);
+    }
+  }, [camera, computeAllWorldVerts, size, defaultCameraStateRef, cameraTargetRef]);
+
+  const fitSelection = useCallback(() => {
+    if (!selectedPieceId) { fitAll(); return; }
+    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
+    const tf = transforms[selectedPieceId];
+    const piece = pieceMap[selectedPieceId];
+    if (!tf || !piece) return;
+    const part = partMap[piece.partId];
+    if (!part) return;
+    const shape = getShapeDef(part.shape);
+    if (!shape) return;
+    const verts = pieceWorldVertices(shape, tf.position, tf.quaternion);
+    const result = computeFitCamera({
+      worldVertices: verts,
+      camera: camera as THREE.OrthographicCamera,
+      controls: controlsRef.current,
+      fillRatio: 0.5,
+      size,
+    });
+    if (result) {
+      applyFitResult(camera as THREE.OrthographicCamera, result, controlsRef.current);
+      cameraTargetRef.current.copy(result.target);
+    }
+  }, [camera, selectedPieceId, transforms, pieceMap, partMap, size, fitAll, cameraTargetRef]);
+
+  // 仅在首次加载或 project.id 变化时自动 fit
+  const lastFitProjectId = useRef<string>('');
+  useEffect(() => {
+    if (project.id !== lastFitProjectId.current) {
+      lastFitProjectId.current = project.id;
+      const t = setTimeout(() => fitAll(), 100);
+      return () => clearTimeout(t);
+    }
+  }, [project.id, fitAll]);
+
+  // 聚焦请求
+  useEffect(() => {
+    if (focusRequest) fitSelection();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusRequest]);
+
+  // fit 请求(工具栏按钮)
+  useEffect(() => {
+    if (fitRequest) fitAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitRequest]);
+
+  const resetView = useCallback(() => {
+    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
+    const state = defaultCameraStateRef.current;
+    if (state) {
+      applyFitResult(camera as THREE.OrthographicCamera, state, controlsRef.current);
+      cameraTargetRef.current.copy(state.target);
+    } else {
+      fitAll();
+    }
+  }, [camera, defaultCameraStateRef, fitAll, cameraTargetRef]);
+
+  // 视图方向切换
+  const setView = useCallback((view: string) => {
+    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
+    const ortho = camera as THREE.OrthographicCamera;
+    const verts = computeAllWorldVerts();
+    if (verts.length === 0) return;
     const box = new THREE.Box3();
-    worldVerts.forEach((v) => box.expandByPoint(v));
+    verts.forEach((v) => box.expandByPoint(v));
     const center = box.getCenter(new THREE.Vector3());
     const dim = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(dim.x, dim.y, dim.z);
-    const distance = maxDim * 1.2 + 5;
-    ortho.position.set(center.x + distance * 0.7, center.y + distance * 0.7, center.z + distance * 0.7);
+    const dist = maxDim * 2 + 5;
+    const pos = new THREE.Vector3();
+    switch (view) {
+      case 'front': pos.set(center.x, center.y, center.z + dist); break;
+      case 'back': pos.set(center.x, center.y, center.z - dist); break;
+      case 'left': pos.set(center.x - dist, center.y, center.z); break;
+      case 'right': pos.set(center.x + dist, center.y, center.z); break;
+      case 'top': pos.set(center.x, center.y + dist, center.z); break;
+      default: return;
+    }
+    ortho.position.copy(pos);
     ortho.lookAt(center);
-    ortho.zoom = 50 / (maxDim + 2);
     ortho.updateProjectionMatrix();
     if (controlsRef.current) {
       controlsRef.current.target.copy(center);
       controlsRef.current.update();
     }
-    defaultCameraStateRef.current = {
-      position: ortho.position.clone(),
-      quaternion: ortho.quaternion.clone(),
-      zoom: ortho.zoom,
-      target: center.clone(),
-    };
-  }, [camera, project.pieces, transforms, pieceMap, partMap, defaultCameraStateRef, size]);
+    cameraTargetRef.current.copy(center);
+  }, [camera, computeAllWorldVerts, cameraTargetRef]);
 
-  // 初始 + 模型变化时自动取景
-  useEffect(() => {
-    const t = setTimeout(() => fitCameraToModel(), 50);
-    return () => clearTimeout(t);
-  }, [fitCameraToModel]);
+  useEffect(() => { resetViewRef.current = resetView; }, [resetView, resetViewRef]);
+  useEffect(() => { fitAllRef.current = fitAll; }, [fitAll, fitAllRef]);
+  useEffect(() => { fitSelectionRef.current = fitSelection; }, [fitSelection, fitSelectionRef]);
+  useEffect(() => { setViewRef.current = setView; }, [setView, setViewRef]);
 
-  // 聚焦请求
-  useEffect(() => {
-    if (focusRequest) fitCameraToPiece(focusRequest.pieceId);
-  }, [focusRequest, fitCameraToPiece]);
-
-  const resetView = useCallback(() => {
-    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return;
-    const ortho = camera as THREE.OrthographicCamera;
-    const state = defaultCameraStateRef.current;
-    if (state) {
-      ortho.position.copy(state.position);
-      ortho.quaternion.copy(state.quaternion);
-      ortho.zoom = state.zoom;
-      ortho.updateProjectionMatrix();
-      if (controlsRef.current) {
-        controlsRef.current.target.copy(state.target);
-        controlsRef.current.update();
-      }
-    } else {
-      fitCameraToModel();
-    }
-  }, [camera, defaultCameraStateRef, fitCameraToModel]);
-
-  useEffect(() => {
-    resetViewRef.current = resetView;
-  }, [resetView, resetViewRef]);
-
-  // 键盘移动/旋转选中零件(WASDQE 移动 / RTFGVB 旋转)
+  /* ---- 键盘快捷键(输入框聚焦时禁用) ---- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // 操作对象是输入框/textarea/contenteditable 时禁用全局快捷键
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
+
       if (selection.kind !== 'piece') return;
       const tf = transforms[selection.id];
       if (!tf) return;
       const step = e.shiftKey ? 1.0 : 0.2;
-      const rotStep = e.shiftKey ? 45 : 15; // 度
+      const rotStep = e.shiftKey ? 45 : 15;
       const pos = [tf.position.x, tf.position.y, tf.position.z] as [number, number, number];
       const q = new THREE.Quaternion(tf.quaternion.x, tf.quaternion.y, tf.quaternion.z, tf.quaternion.w);
       let moved = false;
       let rotated = false;
       const key = e.key.toLowerCase();
       switch (key) {
-        // 移动
         case 'a': pos[0] -= step; moved = true; break;
         case 'd': pos[0] += step; moved = true; break;
         case 'w': pos[2] -= step; moved = true; break;
         case 's': pos[2] += step; moved = true; break;
         case 'q': pos[1] += step; moved = true; break;
         case 'e': pos[1] -= step; moved = true; break;
-        // 旋转(绕世界轴)
         case 'r': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(rotStep))); rotated = true; break;
         case 't': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(-rotStep))); rotated = true; break;
         case 'f': q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), THREE.MathUtils.degToRad(rotStep))); rotated = true; break;
@@ -280,33 +251,145 @@ function SceneContent({
       }
       if (moved || rotated) {
         e.preventDefault();
-        onMovePiece(selection.id, {
-          position: pos,
-          quaternion: [q.x, q.y, q.z, q.w],
-        });
+        onMovePiece(selection.id, { position: pos, quaternion: [q.x, q.y, q.z, q.w] });
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selection, transforms, onMovePiece]);
 
-  // 启动拖拽:选中零件时按住鼠标左键拖动
-  const handlePiecePointerDown = useCallback((pieceId: string, e: any) => {
-    e.stopPropagation();
-    onSelectPiece(pieceId);
-    const tf = transforms[pieceId];
+  /* ---- TransformControls 拖拽事务:单次拖动单次撤销 ---- */
+  const onTransformMouseDown = useCallback(() => {
+    if (!selectedPieceId) return;
+    const tf = transforms[selectedPieceId];
     if (!tf) return;
-    // 记录拖拽起点(鼠标投影到 Y=0 平面,计算与零件的偏移)
-    draggingRef.current = {
-      pieceId,
-      offset: new THREE.Vector3(0, tf.position.y, 0), // 仅记录 Y,拖拽时保持
+    dragStateRef.current = {
+      pieceId: selectedPieceId,
+      startPos: tf.position.clone(),
+      startQuat: tf.quaternion.clone(),
+      committed: false,
     };
-    lastDragPosRefHolder.current = null;
+    // 拖拽期间禁用 OrbitControls
     if (controlsRef.current) controlsRef.current.enabled = false;
-    document.body.style.cursor = 'grabbing';
-  }, [transforms, onSelectPiece]);
+  }, [selectedPieceId, transforms]);
 
-  const lastDragPosRefHolder = useRef<THREE.Vector3 | null>(null);
+  const onTransformObjectChange = useCallback(() => {
+    if (!selectedPieceId || !transformControlsRef.current) return;
+    const obj = transformControlsRef.current.object;
+    if (!obj) return;
+    // 拖拽中实时更新视觉(不提交历史)
+    onMovePiece(selectedPieceId, {
+      position: [obj.position.x, obj.position.y, obj.position.z],
+      quaternion: [obj.quaternion.x, obj.quaternion.y, obj.quaternion.z, obj.quaternion.w],
+    });
+
+    // 磁吸模式:检测吸附候选
+    if (toolMode === 'snap') {
+      const candidate = findBestSnapCandidate(selectedPieceId, project);
+      if (candidate) {
+        // 检查屏幕像素距离是否满足阈值
+        const tf = transforms[selectedPieceId];
+        if (tf) {
+          const screenPos = worldToScreen(tf.position, camera, size);
+          const snapScreenPos = worldToScreen(candidate.resultingTransform.position, camera, size);
+          const pixelDist = Math.hypot(screenPos.x - snapScreenPos.x, screenPos.y - snapScreenPos.y);
+          if (pixelDist < SNAP_PIXEL_THRESHOLD) {
+            setSnapPreview({
+              position: [candidate.resultingTransform.position.x, candidate.resultingTransform.position.y, candidate.resultingTransform.position.z],
+              quaternion: [candidate.resultingTransform.quaternion.x, candidate.resultingTransform.quaternion.y, candidate.resultingTransform.quaternion.z, candidate.resultingTransform.quaternion.w],
+            });
+          } else {
+            setSnapPreview(null);
+          }
+        }
+      } else {
+        setSnapPreview(null);
+      }
+    }
+  }, [selectedPieceId, project, toolMode, transforms, camera, size, onMovePiece]);
+
+  const onTransformMouseUp = useCallback(() => {
+    const drag = dragStateRef.current;
+    if (controlsRef.current) controlsRef.current.enabled = true;
+    if (!drag || drag.committed) {
+      dragStateRef.current = null;
+      setSnapPreview(null);
+      return;
+    }
+
+    // 磁吸模式:如果有吸附预览,提交吸附结果并创建连接
+    if (toolMode === 'snap' && snapPreview && selectedPieceId) {
+      const candidate = findBestSnapCandidate(selectedPieceId, project);
+      if (candidate) {
+        // 提交吸附位置
+        onMovePieceCommit(selectedPieceId, {
+          position: [candidate.resultingTransform.position.x, candidate.resultingTransform.position.y, candidate.resultingTransform.position.z],
+          quaternion: [candidate.resultingTransform.quaternion.x, candidate.resultingTransform.quaternion.y, candidate.resultingTransform.quaternion.z, candidate.resultingTransform.quaternion.w],
+        });
+        // 创建连接
+        onCreateConnection(candidate.connection);
+        drag.committed = true;
+        dragStateRef.current = null;
+        setSnapPreview(null);
+        return;
+      }
+    }
+
+    // 普通模式:提交最终位置(单次撤销记录)
+    if (selectedPieceId && transformControlsRef.current?.object) {
+      const obj = transformControlsRef.current.object;
+      onMovePieceCommit(selectedPieceId, {
+        position: [obj.position.x, obj.position.y, obj.position.z],
+        quaternion: [obj.quaternion.x, obj.quaternion.y, obj.quaternion.z, obj.quaternion.w],
+      });
+    }
+    drag.committed = true;
+    dragStateRef.current = null;
+    setSnapPreview(null);
+  }, [toolMode, snapPreview, selectedPieceId, project, onMovePieceCommit, onCreateConnection]);
+
+  // 监听 pointercancel / lostpointercapture
+  useEffect(() => {
+    const cancel = () => onTransformMouseUp();
+    window.addEventListener('pointercancel', cancel);
+    window.addEventListener('lostpointercapture', cancel);
+    return () => {
+      window.removeEventListener('pointercancel', cancel);
+      window.removeEventListener('lostpointercapture', cancel);
+    };
+  }, [onTransformMouseUp]);
+
+  // TransformControls 事件
+  useEffect(() => {
+    const tc = transformControlsRef.current;
+    if (!tc) return;
+    const onDown = () => onTransformMouseDown();
+    const onUp = () => onTransformMouseUp();
+    tc.addEventListener('mouseDown', onDown);
+    tc.addEventListener('mouseUp', onUp);
+    tc.addEventListener('objectChange', onTransformObjectChange);
+    return () => {
+      tc.removeEventListener('mouseDown', onDown);
+      tc.removeEventListener('mouseUp', onUp);
+      tc.removeEventListener('objectChange', onTransformObjectChange);
+    };
+  }, [onTransformMouseDown, onTransformMouseUp, onTransformObjectChange]);
+
+  // 临时对象:TransformControls 挂载的 dummy
+  const dummyObj = useMemo(() => new THREE.Object3D(), []);
+  useEffect(() => {
+    if (selectedPieceId && transforms[selectedPieceId]) {
+      const tf = transforms[selectedPieceId];
+      dummyObj.position.copy(tf.position);
+      dummyObj.quaternion.copy(tf.quaternion);
+    }
+  }, [selectedPieceId, transforms, dummyObj]);
+
+  // 连接点击检测
+  const handleConnectionClick = useCallback((idx: number, e: any) => {
+    e.stopPropagation();
+    onSelectConnection(idx);
+  }, [onSelectConnection]);
 
   return (
     <>
@@ -320,16 +403,7 @@ function SceneContent({
       />
       <directionalLight position={[-3, 5, -3]} intensity={0.4} />
 
-      {/* 网格地面 */}
       <gridHelper args={[20, 20, '#cbd5e1', '#e2e8f0']} position={[0, -0.01, 0]} />
-
-      {/* 拖拽控制器 */}
-      <DragController
-        transforms={transforms}
-        onMovePiece={onMovePiece}
-        draggingRef={draggingRef}
-        controlsRef={controlsRef}
-      />
 
       {/* 磁力片 */}
       {project.pieces.map((piece) => {
@@ -341,25 +415,42 @@ function SceneContent({
         const isSelected = selection.kind === 'piece' && selection.id === piece.id;
         const isDimmed = selection.kind === 'piece' && selection.id !== piece.id;
         const isHovered = hoveredPiece === piece.id;
+        const isSnapGhost = snapPreview !== null && piece.id === selectedPieceId;
         return (
           <MagnetPieceMesh
             key={piece.id}
             shape={shape}
-            transform={tf}
+            transform={isSnapGhost ? { position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) } : tf}
             color={part.color as MagnetColor}
             selected={isSelected}
             highlighted={isHovered && !isSelected}
             dimmed={isDimmed}
+            opacity={isSnapGhost ? 0.4 : 1}
             onClick={(e: any) => {
               e.stopPropagation();
               onSelectPiece(piece.id);
             }}
-            onPointerDown={(e: any) => handlePiecePointerDown(piece.id, e)}
-            onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'grab'; setHoveredPiece(piece.id); }}
+            onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; setHoveredPiece(piece.id); }}
             onPointerOut={() => { document.body.style.cursor = 'default'; setHoveredPiece(null); }}
           />
         );
       })}
+
+      {/* 吸附预览(半透明 ghost) */}
+      {snapPreview && selectedPieceId && (() => {
+        const piece = pieceMap[selectedPieceId];
+        const part = piece ? partMap[piece.partId] : null;
+        const shape = part ? getShapeDef(part.shape) : null;
+        if (!shape) return null;
+        return (
+          <MagnetPieceMesh
+            shape={shape}
+            transform={{ position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) }}
+            color={(partMap[piece!.partId]?.color ?? 'blue') as MagnetColor}
+            opacity={0.35}
+          />
+        );
+      })()}
 
       {/* 选中 piece 的端口可视化 */}
       {selection.kind === 'piece' && (() => {
@@ -381,20 +472,27 @@ function SceneContent({
         });
       })()}
 
-      {/* 连接线可视化(细蓝线) */}
+      {/* 连接可视化(可点击) */}
       {project.connections.map((conn, idx) => {
         const tfA = transforms[conn.pieceA];
         const tfB = transforms[conn.pieceB];
         if (!tfA || !tfB) return null;
         const isSelected = selection.kind === 'connection' && selection.index === idx;
+        const mid = tfA.position.clone().add(tfB.position).multiplyScalar(0.5);
         return (
-          <Line
-            key={`conn-${idx}`}
-            points={[tfA.position, tfB.position]}
-            color={isSelected ? '#f59e0b' : '#94a3b8'}
-            lineWidth={isSelected ? 2 : 1}
-            dashed={!isSelected}
-          />
+          <group key={`conn-${idx}`} onClick={(e: any) => handleConnectionClick(idx, e)}>
+            <Line
+              points={[tfA.position, tfB.position]}
+              color={isSelected ? '#f59e0b' : '#94a3b8'}
+              lineWidth={isSelected ? 3 : 2}
+              dashed={!isSelected}
+            />
+            {/* 可点击的透明小球 */}
+            <mesh position={mid}>
+              <sphereGeometry args={[0.15, 8, 8]} />
+              <meshBasicMaterial color={isSelected ? '#f59e0b' : '#64748b'} transparent opacity={0.6} />
+            </mesh>
+          </group>
         );
       })}
 
@@ -407,17 +505,61 @@ function SceneContent({
         minDistance={2}
         maxDistance={30}
       />
+
+      {/* TransformControls:仅在选中零件且非选择模式时启用 */}
+      {selectedPieceId && toolMode !== 'select' && (
+        <TransformControls
+          ref={transformControlsRef}
+          object={dummyObj}
+          mode={toolMode === 'rotate' ? 'rotate' : 'translate'}
+          size={0.8}
+          onObjectChange={onTransformObjectChange}
+        />
+      )}
+
+      {/* ViewCube */}
+      <GizmoHelper alignment="top-right" margin={[80, 80]}>
+        <GizmoViewcube
+          onClick={(e: any) => {
+            e?.stopPropagation?.();
+            const face = e?.face?.normal;
+            if (face) {
+              if (face.x > 0.5) setViewRef.current?.('right');
+              else if (face.x < -0.5) setViewRef.current?.('left');
+              else if (face.y > 0.5) setViewRef.current?.('top');
+              else if (face.z > 0.5) setViewRef.current?.('front');
+              else if (face.z < -0.5) setViewRef.current?.('back');
+            }
+            return null as any;
+          }}
+        />
+      </GizmoHelper>
     </>
   );
 }
 
+/** 世界坐标转屏幕像素坐标 */
+function worldToScreen(worldPos: THREE.Vector3, camera: THREE.Camera, size: { width: number; height: number }): { x: number; y: number } {
+  const projected = worldPos.clone().project(camera);
+  return {
+    x: (projected.x + 1) / 2 * size.width,
+    y: (1 - (projected.y + 1) / 2) * size.height,
+  };
+}
+
 export function EditorCanvas({
-  project, selection, onSelectPiece, onSelectConnection: _onSelectConnection, onClearSelection, focusRequest, onMovePiece, onCreateConnection: _onCreateConnection,
+  project, selection, toolMode, onSelectPiece, onSelectConnection, onClearSelection,
+  focusRequest, fitRequest, onMovePiece, onMovePieceCommit, onCreateConnection, cameraTargetRef,
 }: Props) {
   const defaultCameraStateRef = useRef<DefaultCameraState | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
+  const fitAllRef = useRef<(() => void) | null>(null);
+  const fitSelectionRef = useRef<(() => void) | null>(null);
+  const setViewRef = useRef<((view: string) => void) | null>(null);
 
   const resetView = () => resetViewRef.current?.();
+  const fitAll = () => fitAllRef.current?.();
+  const fitSelection = () => fitSelectionRef.current?.();
 
   return (
     <div className="relative w-full h-full overflow-hidden bg-gradient-to-br from-slate-50 to-blue-50">
@@ -433,28 +575,79 @@ export function EditorCanvas({
         <SceneContent
           project={project}
           selection={selection}
+          toolMode={toolMode}
           onSelectPiece={onSelectPiece}
+          onSelectConnection={onSelectConnection}
           onClearSelection={onClearSelection}
           focusRequest={focusRequest}
+          fitRequest={fitRequest}
           onMovePiece={onMovePiece}
+          onMovePieceCommit={onMovePieceCommit}
+          onCreateConnection={onCreateConnection}
           defaultCameraStateRef={defaultCameraStateRef}
           resetViewRef={resetViewRef}
+          fitAllRef={fitAllRef}
+          fitSelectionRef={fitSelectionRef}
+          setViewRef={setViewRef}
+          cameraTargetRef={cameraTargetRef}
         />
       </Canvas>
 
-      <button
-        onClick={resetView}
-        className="absolute bottom-3 right-3 p-2 rounded-full bg-white/80 hover:bg-white shadow-sm"
-        title="重置视角"
-      >
-        <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
+      {/* 右下角按钮组 */}
+      <div className="absolute bottom-3 right-3 flex flex-col gap-2">
+        <button
+          onClick={fitAll}
+          className="p-2 rounded-full bg-white/80 hover:bg-white shadow-sm"
+          title="全部入镜"
+          aria-label="全部入镜"
+        >
+          <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l4 4m8-4h4m0 0v4m0-4l-4 4M4 16v4m0 0h4m-4 0l4-4m8 4l4-4m0 4v-4m0 4h-4" />
+          </svg>
+        </button>
+        <button
+          onClick={fitSelection}
+          className="p-2 rounded-full bg-white/80 hover:bg-white shadow-sm"
+          title="聚焦选中"
+          aria-label="聚焦选中"
+        >
+          <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <circle cx="12" cy="12" r="3" strokeWidth={2} />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v2m0 14v2M3 12h2m14 0h2" />
+          </svg>
+        </button>
+        <button
+          onClick={resetView}
+          className="p-2 rounded-full bg-white/80 hover:bg-white shadow-sm"
+          title="重置视角"
+          aria-label="重置视角"
+        >
+          <svg className="w-5 h-5 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+        </button>
+      </div>
+
+      {/* 视图方向按钮 */}
+      <div className="absolute top-3 right-3 flex gap-1">
+        {(['front', 'back', 'left', 'right', 'top'] as const).map((v) => {
+          const labels = { front: '前', back: '后', left: '左', right: '右', top: '顶' };
+          return (
+            <button
+              key={v}
+              onClick={() => setViewRef.current?.(v)}
+              className="px-2 py-1 text-[10px] bg-white/80 hover:bg-white rounded shadow-sm"
+              title={`${labels[v]}视图`}
+            >
+              {labels[v]}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="absolute bottom-3 left-3 text-xs text-gray-500 pointer-events-none space-y-0.5">
-        <div>左键拖零件:移动 · 右键拖:旋转视角 · 滚轮:缩放</div>
-        <div>WASDQE:移动 · RTFGVB:旋转(Shift 大步)</div>
+        <div>左键:选中 · {toolMode === 'rotate' ? 'Gizmo 旋转' : toolMode === 'move' ? 'Gizmo 移动' : '拖零件移动'} · 右键:旋转视角 · 滚轮:缩放</div>
+        <div>WASDQE:移动 · RTFGVB:旋转 · Shift 大步 · Gizmo 模式下拖拽单次撤销</div>
       </div>
     </div>
   );

@@ -33,14 +33,20 @@ test.describe('重置视角功能', () => {
 test.describe('首页测试', () => {
   test('首页有热门模型卡片', async ({ page }) => {
     await page.goto('/');
-    const cards = page.locator('a[href*="/model/"]');
+    // 等待懒加载页面渲染完成
+    await page.waitForLoadState('networkidle');
+    // 使用 :visible 只统计当前视口下可见的卡片，避免移动端/桌面端两套 DOM 互相干扰
+    const cards = page.locator('a[href*="/model/"]:visible');
+    await expect(cards.first()).toBeVisible();
     const count = await cards.count();
     expect(count).toBeGreaterThanOrEqual(4);
   });
 
   test('首页标题正确', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('h1')).toContainText('亲子磁力片');
+    // 等待懒加载页面渲染完成
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('h1').first()).toContainText('亲子磁力片');
   });
 });
 

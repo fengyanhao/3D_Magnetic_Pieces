@@ -128,8 +128,16 @@ function findOrCreatePart(project: EditorProject, shape: MagnetShape, color: Mag
   return part;
 }
 
-/** 添加一个零件到方案。返回新零件 ID。 */
-export function addPieceAction(h: EditorHistory, shape: MagnetShape, color: MagnetColor): { history: EditorHistory; pieceId: string } {
+/**
+ * 添加一个零件到方案。
+ * @param placePosition 可选放置位置(世界坐标)。不传时根零件放原点,其他零件放视野中心附近(由调用方计算)。
+ */
+export function addPieceAction(
+  h: EditorHistory,
+  shape: MagnetShape,
+  color: MagnetColor,
+  placePosition?: [number, number, number],
+): { history: EditorHistory; pieceId: string } {
   let pieceId = '';
   const history = commit(h, (p) => {
     const part = findOrCreatePart(p, shape, color);
@@ -137,10 +145,18 @@ export function addPieceAction(h: EditorHistory, shape: MagnetShape, color: Magn
     const isRoot = p.pieces.length === 0;
     const piece: PieceRef = { id: pieceId, partId: part.id, isRoot };
     p.pieces.push(piece);
-    // 根零件放原点;其他零件先放一个偏移避免重叠
-    if (!isRoot) {
-      const offset = p.pieces.length * 2;
-      p.transforms[pieceId] = { position: [offset, 0, 0], quaternion: [0, 0, 0, 1] };
+    if (isRoot) {
+      // 根零件放原点(或指定位置)
+      p.transforms[pieceId] = {
+        position: placePosition ?? [0, 0, 0],
+        quaternion: [0, 0, 0, 1],
+      };
+    } else {
+      // 非根零件:使用指定位置,或默认放在原点附近(不再用 pieces.length*2 远距离偏移)
+      p.transforms[pieceId] = {
+        position: placePosition ?? [0.5, 0, 0.5],
+        quaternion: [0, 0, 0, 1],
+      };
     }
     // 自动同步 parts.count
     part.count = p.pieces.filter((pp) => pp.partId === part.id).length;

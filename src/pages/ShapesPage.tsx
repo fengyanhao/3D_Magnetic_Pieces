@@ -1,66 +1,38 @@
 import { useNavigate } from 'react-router-dom';
-import { Square, Triangle, ChevronDown, Circle, Hexagon, Pentagon, Diamond } from 'lucide-react';
+import { Shapes } from 'lucide-react';
+import { shapeDetails } from '../data/shapes';
+import { shapeLabels } from '../data/models';
 
 export function ShapesPage() {
   const navigate = useNavigate();
 
-  const shapes = [
-    { id: 'square', name: '正方形', icon: Square, color: 'bg-red-100 text-red-600', sides: 4 },
-    { id: 'rectangle', name: '长方形', icon: Square, color: 'bg-blue-100 text-blue-600', sides: 4 },
-    { id: 'equilateral-triangle', name: '等边三角形', icon: Triangle, color: 'bg-green-100 text-green-600', sides: 3 },
-    { id: 'isosceles-triangle', name: '等腰三角形', icon: Triangle, color: 'bg-yellow-100 text-yellow-600', sides: 3 },
-    { id: 'right-triangle', name: '直角三角形', icon: Triangle, color: 'bg-purple-100 text-purple-600', sides: 3 },
-    { id: 'long-right-triangle', name: '长直角三角形', icon: Triangle, color: 'bg-pink-100 text-pink-600', sides: 3 },
-    { id: 'trapezoid', name: '梯形', icon: ChevronDown, color: 'bg-cyan-100 text-cyan-600', sides: 4 },
-    { id: 'rhombus', name: '菱形', icon: Diamond, color: 'bg-orange-100 text-orange-600', sides: 4 },
-    { id: 'pentagon', name: '五边形', icon: Pentagon, color: 'bg-indigo-100 text-indigo-600', sides: 5 },
-    { id: 'hexagon', name: '六边形', icon: Hexagon, color: 'bg-teal-100 text-teal-600', sides: 6 },
-    { id: 'semicircle', name: '半圆', icon: Circle, color: 'bg-gray-100 text-gray-600', sides: 1 },
-    { id: 'sector', name: '扇形', icon: Circle, color: 'bg-amber-100 text-amber-600', sides: 1 },
-  ];
-
   return (
-    <div className="container min-h-screen bg-gradient-to-br from-orange-50 to-blue-50">
-      <div className="safe-area-top" />
-      <header className="px-4 py-4">
-        <h1 className="text-2xl font-bold text-gray-800">基础形状</h1>
-        <p className="text-gray-500 mt-1">认识不同形状的磁力片</p>
-      </header>
-      <main className="px-4 pb-8">
-        <div className="grid grid-cols-3 gap-3">
-          {shapes.map((shape) => (
+    <div className="max-w-[1440px] mx-auto px-4 md:px-8 lg:px-10 py-6 md:py-10">
+      <div className="text-center mb-8 md:mb-10">
+        <h1 className="text-2xl md:text-3xl font-bold text-gray-800 mb-2">基础形状</h1>
+        <p className="text-gray-500">认识磁力片的各种基本形状</p>
+      </div>
+
+      <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3 md:gap-4">
+        {shapeDetails.map((shape) => {
+          const ShapeIcon = shape.icon || Shapes;
+          return (
             <button
               key={shape.id}
               onClick={() => navigate(`/learn/shapes/${shape.id}`)}
-              className="bg-white rounded-xl p-3 shadow-sm hover:shadow-md transition-all flex flex-col items-center gap-2"
+              className="bg-white rounded-2xl p-4 md:p-5 border border-gray-100 hover:shadow-md transition-all active:scale-[0.98] flex flex-col items-center text-center gap-2"
             >
-              <div className={`w-10 h-10 rounded-lg ${shape.color} flex items-center justify-center`}>
-                <shape.icon className="w-5 h-5" />
+              <div className="w-14 h-14 md:w-16 md:h-16 rounded-2xl bg-primary-50 flex items-center justify-center">
+                <ShapeIcon className="w-7 h-7 md:w-8 md:h-8 text-primary-500" />
               </div>
-              <span className="text-sm font-medium text-gray-700">{shape.name}</span>
-              <span className="text-xs text-gray-400">{shape.sides}边</span>
+              <div>
+                <h3 className="font-bold text-gray-800 text-sm md:text-base">{shape.name}</h3>
+                <p className="text-xs text-gray-400 mt-0.5">{shapeLabels[shape.id]}</p>
+              </div>
             </button>
-          ))}
-        </div>
-
-        <div className="mt-6 bg-white rounded-2xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3">形状小知识</h3>
-          <ul className="space-y-2 text-sm text-gray-600">
-            <li className="flex items-start gap-2">
-              <span className="w-1.5 h-1.5 bg-primary-500 rounded-full mt-1.5 shrink-0" />
-              <span>正方形有4条边，每条边长度相等</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="w-1.5 h-1.5 bg-primary-500 rounded-full mt-1.5 shrink-0" />
-              <span>三角形是最稳定的形状</span>
-            </li>
-            <li className="flex items-start gap-2">
-              <span className="w-1.5 h-1.5 bg-primary-500 rounded-full mt-1.5 shrink-0" />
-              <span>六边形可以紧密排列，没有空隙</span>
-            </li>
-          </ul>
-        </div>
-      </main>
+          );
+        })}
+      </div>
     </div>
   );
 }

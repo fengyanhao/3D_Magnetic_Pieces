@@ -1,5 +1,6 @@
 import { MagnetShape, MagnetColor } from '../data/types';
 import { shapeLibrary } from '../engine/shapes';
+import { sampleShapeOutline } from '../components/magnet3d/primitives';
 
 /**
  * 磁力片零件库元数据。
@@ -47,8 +48,10 @@ export const shapeCatalog: ShapeCatalogEntry[] = [
   const def = shapeLibrary[entry.shape];
   let dimensions = '';
   if (def) {
-    const xs = def.vertices.map((v) => v.x);
-    const ys = def.vertices.map((v) => v.y);
+    // P1-6: 用采样轮廓计算尺寸,使半圆高度=0.50、扇形含弧
+    const pts = sampleShapeOutline(def);
+    const xs = pts.map((v) => v.x);
+    const ys = pts.map((v) => v.y);
     const w = Math.max(...xs) - Math.min(...xs);
     const h = Math.max(...ys) - Math.min(...ys);
     dimensions = `${w.toFixed(2)} × ${h.toFixed(2)} × ${def.thickness.toFixed(2)}`;
@@ -56,12 +59,14 @@ export const shapeCatalog: ShapeCatalogEntry[] = [
   return { ...entry, dimensions } as ShapeCatalogEntry;
 });
 
-/** 简易 SVG 缩略图:按形状顶点绘制俯视图轮廓。 */
+/** 简易 SVG 缩略图:P1-6 用采样轮廓(含圆弧)绘制俯视图。 */
 export function shapeThumbnailSvg(shape: MagnetShape, size = 48): string {
   const def = shapeLibrary[shape];
   if (!def) return '';
-  const xs = def.vertices.map((v) => v.x);
-  const ys = def.vertices.map((v) => v.y);
+  // P1-6: 采样轮廓(含曲线),避免半圆/扇形显示为直线
+  const pts = sampleShapeOutline(def);
+  const xs = pts.map((v) => v.x);
+  const ys = pts.map((v) => v.y);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
   const minY = Math.min(...ys), maxY = Math.max(...ys);
   const w = maxX - minX || 1;
@@ -70,8 +75,8 @@ export function shapeThumbnailSvg(shape: MagnetShape, size = 48): string {
   const scale = (size - pad * 2) / Math.max(w, h);
   const ox = (size - w * scale) / 2 - minX * scale;
   const oy = (size - h * scale) / 2 - minY * scale;
-  const pts = def.vertices.map((v) => `${(v.x * scale + ox).toFixed(2)},${(v.y * scale + oy).toFixed(2)}`).join(' ');
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><polygon points="${pts}" fill="#cbd5e1" stroke="#475569" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
+  const ptsStr = pts.map((v) => `${(v.x * scale + ox).toFixed(2)},${(v.y * scale + oy).toFixed(2)}`).join(' ');
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><polygon points="${ptsStr}" fill="#cbd5e1" stroke="#475569" stroke-width="1.5" stroke-linejoin="round"/></svg>`;
 }
 
 export function shapeThumbnailDataUrl(shape: MagnetShape, size = 48): string {

@@ -7,12 +7,19 @@ export interface SolverContext {
   connections: Connection[];
   rootPieceId: string;
   getShapeForPiece: (pieceId: string) => ShapeDef | undefined;
+  /**
+   * 根零件的世界变换(P0-3)。
+   * 若提供,求解器从此变换开始而非硬编码原点;
+   * 这样移动根零件时整个连接组件跟随移动。
+   * 不提供时回退到原点 + Q_GROUND(保持向后兼容)。
+   */
+  rootTransform?: PieceTransform;
 }
 
 const Q_GROUND = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
 
 export function solveConnections(ctx: SolverContext): SolverResult {
-  const { pieces, connections, rootPieceId, getShapeForPiece } = ctx;
+  const { pieces, connections, rootPieceId, getShapeForPiece, rootTransform } = ctx;
 
   const transforms: Record<string, PieceTransform> = {};
   const visited = new Set<string>();
@@ -22,10 +29,18 @@ export function solveConnections(ctx: SolverContext): SolverResult {
   if (!rootShape) {
     return { transforms, error: `根零件 ${rootPieceId} 缺少形状定义`, spanningTreeConnectionIndices, loopResiduals: [] };
   }
-  transforms[rootPieceId] = {
-    position: new Vector3(0, 0, 0),
-    quaternion: Q_GROUND.clone(),
-  };
+  // P0-3: 从 rootTransform 开始(若提供),否则回退到原点 + Q_GROUND
+  if (rootTransform) {
+    transforms[rootPieceId] = {
+      position: rootTransform.position.clone(),
+      quaternion: rootTransform.quaternion.clone(),
+    };
+  } else {
+    transforms[rootPieceId] = {
+      position: new Vector3(0, 0, 0),
+      quaternion: Q_GROUND.clone(),
+    };
+  }
   visited.add(rootPieceId);
 
   const adj: Record<string, { conn: Connection; neighbor: string; connIndex: number }[]> = {};

@@ -16,7 +16,7 @@ describe('路由测试', () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(screen.getByRole('heading', { name: /亲子磁力片/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: /亲子磁力片/i }).length).toBeGreaterThanOrEqual(1);
   });
 
   it('模型列表路由正常渲染', () => {
@@ -27,7 +27,7 @@ describe('路由测试', () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(screen.getByText(/模型列表/i)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/搜索模型名称/i)).toBeInTheDocument();
   });
 
   it('模型详情路由正常渲染', () => {
@@ -50,7 +50,7 @@ describe('路由测试', () => {
         </Routes>
       </MemoryRouter>
     );
-    expect(screen.getByText(/第 1 \/ 3 步/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/第 1 \/ 3 步/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it('未知路由显示404页面', () => {
@@ -62,6 +62,6 @@ describe('路由测试', () => {
       </MemoryRouter>
     );
     expect(screen.getByText(/404/i)).toBeInTheDocument();
-    expect(screen.getByText(/页面丢了/i)).toBeInTheDocument();
+    expect(screen.getByText(/页面未找到/i)).toBeInTheDocument();
   });
 });

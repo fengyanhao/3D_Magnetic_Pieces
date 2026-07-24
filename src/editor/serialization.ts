@@ -32,10 +32,17 @@ function snapshotTransforms(
   pieces: PieceRef[],
   connections: Connection[],
   getShapeForPiece: (pid: string) => ReturnType<typeof getShapeDef>,
+  editorTransforms?: Record<string, SerializableTransform>,
 ): Record<string, SerializableTransform> {
   if (pieces.length === 0) return {};
   const root = pieces.find((p) => p.isRoot) || pieces[0];
-  const res = solveConnections({ pieces, connections, rootPieceId: root.id, getShapeForPiece });
+  // P0-3: 把根零件的 editor transform 作为 rootTransform 传给求解器,
+  // 使移动根零件时整个连接组件跟随移动(不再硬编码原点)。
+  let rootTransform: PieceTransform | undefined;
+  if (editorTransforms && editorTransforms[root.id]) {
+    rootTransform = transformFromSerializable(editorTransforms[root.id]);
+  }
+  const res = solveConnections({ pieces, connections, rootPieceId: root.id, getShapeForPiece, rootTransform });
   const out: Record<string, SerializableTransform> = {};
   for (const p of pieces) {
     const tf = res.transforms[p.id];
@@ -137,6 +144,7 @@ export function modelToProject(model: Model): EditorProject {
 
   const parts: PartDef[] = model.parts.map((p) => ({ ...p }));
   const getShape = makeGetShape(parts, pieces);
+  // 首次导入无 editor transforms,求解器回退到原点 + Q_GROUND
   const transforms = snapshotTransforms(pieces, connections, getShape);
 
   const now = new Date().toISOString();
@@ -359,7 +367,8 @@ export function exportShapes() {
 /** 用于将 piece transforms 同步为 solver 结果(吸附/连接后调用)。 */
 export function resnapshotTransforms(project: EditorProject): Record<string, SerializableTransform> {
   const getShape = makeGetShape(project.parts, project.pieces);
-  return snapshotTransforms(project.pieces, project.connections, getShape);
+  // P0-3: 传入 editor transforms,使求解器从根零件的当前位置开始
+  return snapshotTransforms(project.pieces, project.connections, getShape, project.transforms);
 }
 
 export function transformFromSerializable(s: SerializableTransform): PieceTransform {

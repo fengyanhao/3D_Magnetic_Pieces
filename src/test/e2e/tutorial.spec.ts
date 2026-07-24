@@ -3,8 +3,8 @@ import { test, expect } from '@playwright/test';
 test('教程页面正常加载', async ({ page }) => {
   await page.goto('/tutorial/house-1');
   await expect(page).toHaveTitle(/亲子磁力片/);
-  const stepIndicator = page.locator('[data-testid="step-indicator"]');
-  await expect(stepIndicator).toBeVisible();
+  const scene = page.locator('[data-testid="magnet-scene"]');
+  await expect(scene).toBeVisible();
 });
 
 test('教程步骤导航', async ({ page }) => {
@@ -12,18 +12,19 @@ test('教程步骤导航', async ({ page }) => {
 
   const prevBtn = page.locator('[data-testid="prev-step"]');
   const nextBtn = page.locator('[data-testid="next-step"]');
-  const stepIndicator = page.locator('[data-testid="step-indicator"]');
+  // 桌面端和移动端都有"第 X / 3 步"文本，使用 filter({ visible: true }) 匹配当前可见的
+  const stepIndicator = page.getByText('第 1 / 3 步').filter({ visible: true });
 
-  await expect(stepIndicator).toHaveText('第 1 / 3 步');
-
-  await nextBtn.click();
-  await expect(stepIndicator).toHaveText('第 2 / 3 步');
+  await expect(stepIndicator).toBeVisible();
 
   await nextBtn.click();
-  await expect(stepIndicator).toHaveText('第 3 / 3 步');
+  await expect(page.getByText('第 2 / 3 步').filter({ visible: true })).toBeVisible();
+
+  await nextBtn.click();
+  await expect(page.getByText('第 3 / 3 步').filter({ visible: true })).toBeVisible();
 
   await prevBtn.click();
-  await expect(stepIndicator).toHaveText('第 2 / 3 步');
+  await expect(page.getByText('第 2 / 3 步').filter({ visible: true })).toBeVisible();
 });
 
 test('场景容器存在', async ({ page }) => {
@@ -51,7 +52,7 @@ test('六个模型教程页面都可访问', async ({ page }) => {
 
   for (const id of modelIds) {
     await page.goto(`/tutorial/${id}`);
-    await page.waitForSelector('[data-testid="step-indicator"]');
+    await page.waitForSelector('[data-testid="magnet-scene"]');
     const title = await page.title();
     expect(title).toBeTruthy();
   }
