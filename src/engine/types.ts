@@ -163,9 +163,38 @@ export interface ValidationIssue {
   stepId?: number;
   message: string;
   severity: 'error' | 'warning';
+  /**
+   * P1-13: 机器可读的错误码,供 editor 层做分类与过滤,避免依赖中文文案匹配。
+   * @see ValidationIssueCode
+   */
+  code?: string;
 }
 
 export interface ValidationResult {
   valid: boolean;
   issues: ValidationIssue[];
 }
+
+/**
+ * P1-13: 校验问题的标准错误码,与 ValidationIssue.code 字段对应。
+ * editor 层基于 code 分类,不依赖中文文案匹配,改文案不会破坏分类。
+ */
+export const ValidationIssueCode = {
+  UNCONNECTED: 'unconnected',
+  PORT_REUSE: 'port-reuse',
+  PORT_OVERLAP: 'port-overlap',
+  PORT_LENGTH: 'port-length',
+  PORT_MISSING: 'port-missing',
+  INTERSECTION: 'intersection',
+  LOOP_RESIDUAL: 'loop-residual',
+  LOOP_POSITION_ERROR: 'loop-position-error',
+  LOOP_DIRECTION_ERROR: 'loop-direction-error',
+  LOOP_DIHEDRAL_ERROR: 'loop-dihedral-error',
+  GROUND: 'ground',
+  STABILITY: 'stability',
+  PLANARITY: 'planarity',
+  STEP: 'step',
+  DIHEDRAL_INVALID: 'dihedral-invalid',
+} as const;
+
+export type ValidationIssueCode = typeof ValidationIssueCode[keyof typeof ValidationIssueCode];

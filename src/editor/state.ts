@@ -51,6 +51,11 @@ export function createInitialHistory(): EditorHistory {
 }
 
 function cloneProject(p: EditorProject): EditorProject {
+  // P0-4: structuredClone 比 JSON 往返快 5-10x,且不丢 Date/Map 等结构(此处数据全可序列化,但保留语义更稳)。
+  // 老旧环境(无 structuredClone,如非现代浏览器)降级到 JSON 方式。
+  if (typeof structuredClone === 'function') {
+    return structuredClone(p);
+  }
   return JSON.parse(JSON.stringify(p)) as EditorProject;
 }
 

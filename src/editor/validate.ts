@@ -40,9 +40,32 @@ export type ValidationCategory =
   | 'dihedral' // 二面角非法
   | 'other';
 
-function categorize(msg: string): ValidationCategory {
+function categorize(raw: ValidationIssue): ValidationCategory {
+  // P1-13: 优先用机器可读的 code 字段,避免依赖中文文案匹配
+  switch (raw.code) {
+    case 'unconnected': return 'unconnected';
+    case 'port-reuse': return 'port-reuse';
+    case 'port-overlap': return 'port-overlap';
+    case 'port-length': return 'port-length';
+    case 'port-missing': return 'port-missing';
+    case 'intersection': return 'intersection';
+    case 'loop-residual':
+    case 'loop-position-error':
+    case 'loop-direction-error':
+    case 'loop-dihedral-error':
+      return 'loop-residual';
+    case 'ground': return 'ground';
+    case 'stability': return 'stability';
+    case 'planarity': return 'planarity';
+    case 'step': return 'step';
+    case 'dihedral-invalid': return 'dihedral';
+    default:
+      break;
+  }
+  // 兜底:旧路径未填 code 时,用文案匹配(避免遗漏已发布 issue)
+  const msg = raw.message;
   if (msg.includes('不连通') || msg.includes('未连通')) return 'unconnected';
-  if (msg.includes('多次使用') || msg.includes('端口') && msg.includes('占用')) return 'port-reuse';
+  if (msg.includes('多次使用') || (msg.includes('端口') && msg.includes('占用'))) return 'port-reuse';
   if (msg.includes('端口') && msg.includes('重叠')) return 'port-overlap';
   if (msg.includes('长度不兼容')) return 'port-length';
   if (msg.includes('不存在的端口')) return 'port-missing';
@@ -114,7 +137,7 @@ export function runValidation(project: EditorProject): EditorValidationResult {
     portId: raw.portId,
     edgeId: raw.edgeId,
     stepId: raw.stepId,
-    category: categorize(raw.message),
+    category: categorize(raw),
   }));
 
   const errorCount = issues.filter((i) => i.severity === 'error').length;

@@ -6,7 +6,7 @@ import { MagnetColor } from '../../data/types';
 import { getShapeDef } from '../../engine/shapes';
 import { Connection } from '../../engine/types';
 import { MagnetPieceMesh } from '../magnet3d/primitives';
-import { EditorProject } from '../../editor/types';
+import { EditorProject, SerializableTransform } from '../../editor/types';
 import { getDisplayTransforms, findCompatibleTargets, buildPortUsage, findBestSnapCandidate } from '../../editor/snap';
 import { computeFitCamera, applyFitResult, pieceWorldVertices } from '../magnet3d/cameraUtils';
 import type { Selection } from './EditorWorkspace';
@@ -22,10 +22,12 @@ interface Props {
   onClearSelection: () => void;
   focusRequest: { pieceId: string; ts: number } | null;
   fitRequest: { ts: number } | null;
-  onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
-  onMovePieceCommit: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  onMovePiece: (pieceId: string, tf: SerializableTransform) => void;
+  onMovePieceCommit: (pieceId: string, tf: SerializableTransform) => void;
   onCreateConnection: (conn: Connection) => void;
   cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
+  /** P0-3: 拖拽期间的实时变换覆盖(只覆盖单个 piece),避免重算 solver */
+  liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
 }
 
 interface DefaultCameraState {
@@ -40,7 +42,7 @@ const SNAP_PIXEL_THRESHOLD = 28; // 屏幕像素阈值
 function SceneContent({
   project, selection, toolMode, onSelectPiece, onSelectConnection, focusRequest, fitRequest,
   onMovePiece, onMovePieceCommit, onCreateConnection, defaultCameraStateRef, resetViewRef,
-  fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef,
+  fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef, liveTransformOverride,
 }: {
   project: EditorProject;
   selection: Selection;
@@ -50,8 +52,8 @@ function SceneContent({
   onClearSelection: () => void;
   focusRequest: { pieceId: string; ts: number } | null;
   fitRequest: { ts: number } | null;
-  onMovePiece: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
-  onMovePieceCommit: (pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => void;
+  onMovePiece: (pieceId: string, tf: SerializableTransform) => void;
+  onMovePieceCommit: (pieceId: string, tf: SerializableTransform) => void;
   onCreateConnection: (conn: Connection) => void;
   defaultCameraStateRef: React.MutableRefObject<DefaultCameraState | null>;
   resetViewRef: React.MutableRefObject<(() => void) | null>;
@@ -59,6 +61,7 @@ function SceneContent({
   fitSelectionRef: React.MutableRefObject<(() => void) | null>;
   setViewRef: React.MutableRefObject<((view: string) => void) | null>;
   cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
+  liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
 }) {
   const partMap = useMemo(() => {
     const m: Record<string, EditorProject['parts'][number]> = {};
@@ -71,7 +74,20 @@ function SceneContent({
     return m;
   }, [project.pieces]);
 
-  const transforms = useMemo(() => getDisplayTransforms(project), [project]);
+  // P0-3: 拖拽期间用 liveTransformOverride 覆盖单 piece transform,
+  // 避免每次拖动都重算 solveConnections(solver 仅在 project 变化时跑一次)。
+  const transforms = useMemo(() => {
+    const base = getDisplayTransforms(project);
+    if (!liveTransformOverride) return base;
+    const { pieceId, tf } = liveTransformOverride;
+    return {
+      ...base,
+      [pieceId]: {
+        position: new THREE.Vector3(tf.position[0], tf.position[1], tf.position[2]),
+        quaternion: new THREE.Quaternion(tf.quaternion[0], tf.quaternion[1], tf.quaternion[2], tf.quaternion[3]),
+      },
+    };
+  }, [project, liveTransformOverride]);
   const portUsage = useMemo(() => buildPortUsage(project), [project.connections]);
 
   const compatibleTargets = useMemo(() => {
@@ -550,6 +566,7 @@ function worldToScreen(worldPos: THREE.Vector3, camera: THREE.Camera, size: { wi
 export function EditorCanvas({
   project, selection, toolMode, onSelectPiece, onSelectConnection, onClearSelection,
   focusRequest, fitRequest, onMovePiece, onMovePieceCommit, onCreateConnection, cameraTargetRef,
+  liveTransformOverride,
 }: Props) {
   const defaultCameraStateRef = useRef<DefaultCameraState | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
@@ -590,6 +607,7 @@ export function EditorCanvas({
           fitSelectionRef={fitSelectionRef}
           setViewRef={setViewRef}
           cameraTargetRef={cameraTargetRef}
+          liveTransformOverride={liveTransformOverride}
         />
       </Canvas>
 

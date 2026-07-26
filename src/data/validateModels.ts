@@ -17,9 +17,7 @@ const validColors = [
   'pink', 'white', 'black', 'clear',
 ];
 
-function isFiniteNumber(n: unknown): n is number {
-  return typeof n === 'number' && Number.isFinite(n);
-}
+// P0-1: isFiniteNumber 仅在 v1 addedPieces 校验块中使用,该块已移除。
 
 export function validateModels(): ValidationError[] {
   const errors: ValidationError[] = [];
@@ -83,9 +81,9 @@ export function validateModels(): ValidationError[] {
           message: `第 ${stepIdx + 1} 个步骤的 id 应为 ${stepIdx + 1}，实际为 ${step.id}`,
         });
       }
-      const hasAddedPieces = Array.isArray(step.addedPieces) && step.addedPieces.length > 0;
+      // P0-1: 移除 v1 addedPieces 校验,统一使用 addedPieceIds
       const hasAddedPieceIds = Array.isArray(step.addedPieceIds) && step.addedPieceIds.length > 0;
-      if (!hasAddedPieces && !hasAddedPieceIds) {
+      if (!hasAddedPieceIds) {
         errors.push({
           modelId: model.id,
           modelName: model.name,
@@ -122,46 +120,7 @@ export function validateModels(): ValidationError[] {
     model.pieces?.forEach((p) => { pieceMap[p.id] = p; });
 
     model.steps.forEach((step, stepIdx) => {
-      // 旧格式
-      step.addedPieces?.forEach((piece) => {
-        if (!partIdSet.has(piece.partId)) {
-          errors.push({
-            modelId: model.id,
-            modelName: model.name,
-            message: `步骤 ${stepIdx + 1} 的零件 ${piece.partId} 不存在于零件清单中`,
-          });
-        }
-
-        if (pieceIds.has(piece.id)) {
-          errors.push({
-            modelId: model.id,
-            modelName: model.name,
-            message: `零件实例 ${piece.id} 在模型中重复定义`,
-          });
-        }
-        pieceIds.add(piece.id);
-
-        if (partUsage[piece.partId] !== undefined) {
-          partUsage[piece.partId]++;
-        }
-
-        // position/rotation 必须是有限数字
-        if (!Array.isArray(piece.position) || piece.position.length !== 3 || !piece.position.every(isFiniteNumber)) {
-          errors.push({
-            modelId: model.id,
-            modelName: model.name,
-            message: `零件实例 ${piece.id} 的 position 不合法: [${piece.position?.join(', ')}]`,
-          });
-        }
-        if (!Array.isArray(piece.rotation) || piece.rotation.length !== 3 || !piece.rotation.every(isFiniteNumber)) {
-          errors.push({
-            modelId: model.id,
-            modelName: model.name,
-            message: `零件实例 ${piece.id} 的 rotation 不合法: [${piece.rotation?.join(', ')}]`,
-          });
-        }
-      });
-
+      // P0-1: 移除 v1 addedPieces 校验块(模型数据已统一 v2 addedPieceIds)
       // v2 格式
       step.addedPieceIds?.forEach((pid) => {
         const piece = pieceMap[pid];

@@ -336,21 +336,39 @@ export function MagnetPieceMesh({
     }
   });
 
+  // P1-9: highlightMat 复用单一实例,通过属性变更避免每次状态切换都 new 一个材质导致 GPU 内存泄漏。
+  // 切换 selected/highlighted/dimmed 只需调整 emissiveIntensity/opacity,无需重建材质。
   const highlightMat = useMemo(() => {
     const fill = parseRgbaString(magnetColorMap[color]);
-    const emissiveIntensity = selected ? 0.6 : highlighted ? 0.4 : isNew && !isAnimatingRef.current ? 0.5 : 0;
     return new THREE.MeshStandardMaterial({
       color: new THREE.Color(fill.r, fill.g, fill.b),
       emissive: new THREE.Color(0.3, 0.3, 0.3),
-      emissiveIntensity,
+      emissiveIntensity: 0,
       roughness: 0.2,
       metalness: 0.1,
       side: THREE.FrontSide,
       depthWrite: true,
-      transparent: dimmed || opacity < 1,
-      opacity: dimmed ? 0.35 : opacity,
+      transparent: false,
+      opacity: 1,
     });
-  }, [color, isNew, selected, highlighted, dimmed, opacity]);
+    // 仅在 color 变化时重建材质(color 影响 color 属性);其他状态切换通过下面的 useEffect 调整属性
+  }, [color]);
+
+  // 切换状态时只调整属性,不重建材质
+  useEffect(() => {
+    const isAnim = isAnimatingRef.current;
+    highlightMat.emissiveIntensity = selected ? 0.6 : highlighted ? 0.4 : isNew && !isAnim ? 0.5 : 0;
+    highlightMat.transparent = dimmed || opacity < 1;
+    highlightMat.opacity = dimmed ? 0.35 : opacity;
+    highlightMat.needsUpdate = true;
+  }, [highlightMat, selected, highlighted, dimmed, opacity, isNew]);
+
+  // 组件卸载时释放材质,防止 GPU 资源累积
+  useEffect(() => {
+    return () => {
+      highlightMat.dispose();
+    };
+  }, [highlightMat]);
 
   const useHighlight = selected || highlighted || (isNew && !isAnimatingRef.current && debugFlags.showHighlight);
 

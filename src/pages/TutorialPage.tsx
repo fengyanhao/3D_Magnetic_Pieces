@@ -73,7 +73,7 @@ function TutorialContent({ modelId }: { modelId: string }) {
 
   const currentStepData = steps[currentStep];
   const currentParts = useMemo(() => {
-    if (currentStepData?.addedPieces) return currentStepData.addedPieces;
+    // P0-1: 移除 v1 addedPieces 分支,统一使用 addedPieceIds
     if (currentStepData?.addedPieceIds) {
       return currentStepData.addedPieceIds
         .map((pid) => {

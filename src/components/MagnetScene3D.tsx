@@ -26,11 +26,10 @@ function getVisiblePieceIds(model: Model, stepIndex: number): string[] {
   const target = stepIndex === -1 ? model.steps.length - 1 : stepIndex;
   const ids: string[] = [];
   for (let i = 0; i <= target; i++) {
+    // P0-1: 所有 v2 模型已统一使用 addedPieceIds,移除 v1 addedPieces 兼容分支
     const s = model.steps[i];
     if (s.addedPieceIds) {
       ids.push(...s.addedPieceIds);
-    } else if (s.addedPieces) {
-      ids.push(...s.addedPieces.map((p) => p.id));
     }
   }
   return ids;
@@ -39,8 +38,8 @@ function getVisiblePieceIds(model: Model, stepIndex: number): string[] {
 function getNewPieceIds(model: Model, stepIndex: number): Set<string> {
   const target = stepIndex === -1 ? model.steps.length - 1 : stepIndex;
   const s = model.steps[target];
+  // P0-1: 移除 v1 addedPieces 兼容分支
   if (s?.addedPieceIds) return new Set(s.addedPieceIds);
-  if (s?.addedPieces) return new Set(s.addedPieces.map((p) => p.id));
   return new Set();
 }
 

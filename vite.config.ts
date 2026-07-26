@@ -57,8 +57,11 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
+        // P1-11: 细化 manualChunks 分组,减小首屏 chunk 体积
         manualChunks: {
           'three': ['three', '@react-three/fiber', '@react-three/drei'],
+          'react': ['react', 'react-dom', 'react-router-dom'],
+          'icons': ['lucide-react'],
         },
       },
     },

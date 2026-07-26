@@ -48,11 +48,15 @@ function listFromLocalStorage(): { key: string; name: string; updatedAt: string 
   return out.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
+// 模块级单例:固定对象引用,避免每次 render 返回新对象导致依赖它的 effect/useMemo 反复重排。
+export const draftStore: DraftStore = {
+  save: saveToLocalStorage,
+  load: async (key) => loadFromLocalStorage(key),
+  list: listFromLocalStorage,
+  remove: (key) => localStorage.removeItem(LS_PREFIX + key),
+};
+
+/** @deprecated 改用 draftStore 单例,保留以避免破坏外部调用方 */
 export function useDraftStore(): DraftStore {
-  return {
-    save: saveToLocalStorage,
-    load: async (key) => loadFromLocalStorage(key),
-    list: listFromLocalStorage,
-    remove: (key) => localStorage.removeItem(LS_PREFIX + key),
-  };
+  return draftStore;
 }

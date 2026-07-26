@@ -1,4 +1,4 @@
-import { useEffect, useState, lazy, Suspense } from 'react';
+import { useState, lazy, Suspense } from 'react';
 import { HashRouter, BrowserRouter, Routes, Route, Outlet } from 'react-router-dom';
 import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -64,12 +64,9 @@ function AppRoutes() {
 }
 
 function App() {
-  // 服务端渲染时强制 false 以保持一致；客户端再根据协议决定
-  const [useHash, setUseHash] = useState(false);
-
-  useEffect(() => {
-    setUseHash(shouldUseHashRouter());
-  }, []);
+  // 同步初始化:避免首屏用 BrowserRouter 渲染后再切到 HashRouter,
+  // 导致整棵 Router 树卸载重挂、lazy 状态丢失。
+  const [useHash] = useState(() => shouldUseHashRouter());
 
   const Router = useHash ? HashRouter : BrowserRouter;
 

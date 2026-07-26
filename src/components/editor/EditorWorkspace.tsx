@@ -13,7 +13,7 @@ import {
 import { runValidation, EditorValidationResult } from '../../editor/validate';
 import { serializeProject, parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
 import { modelToProject } from '../../editor/serialization';
-import { EditorProject } from '../../editor/types';
+import { EditorProject, SerializableTransform } from '../../editor/types';
 import { findConnectionToParent, computeDihedralFromMovedTransform } from '../../editor/snap';
 import { PieceTransform } from '../../engine/types';
 import { models } from '../../data/models';
@@ -49,6 +49,10 @@ export function EditorWorkspace() {
   const [showDrafts, setShowDrafts] = useState(false);
   const [draftVersion, setDraftVersion] = useState(0); // 触发草稿列表刷新
   const [autoSaved, setAutoSaved] = useState(false);
+  // P0-3: 拖拽期间的轻量级实时变换覆盖,只更新当前拖动 piece 的 transform,
+  // 避免每次 setHistory 都触发 solver 重算 / 校验重排 / 自动保存重排。
+  // commit 时清空,落回 history.transforms。
+  const [liveTransformOverride, setLiveTransformOverride] = useState<{ pieceId: string; tf: SerializableTransform } | null>(null);
 
   const project = history.current;
   const draft = useDraftStore();
@@ -105,11 +109,9 @@ export function EditorWorkspace() {
   }, []);
 
   // 更新 current 但不入栈(用于拖拽期间的实时视觉更新)
-  const updatePieceTransformLive = useCallback((pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => {
-    setHistory((h) => ({
-      ...h,
-      current: { ...h.current, transforms: { ...h.current.transforms, [pieceId]: tf }, updatedAt: new Date().toISOString() },
-    }));
+  // P0-3: 改为只更新轻量 liveTransformOverride,避免每帧 setHistory 触发 solver 重算
+  const updatePieceTransformLive = useCallback((pieceId: string, tf: SerializableTransform) => {
+    setLiveTransformOverride({ pieceId, tf });
   }, []);
 
   const handleAddPiece = useCallback((shape: any, color: any) => {
@@ -148,7 +150,9 @@ export function EditorWorkspace() {
     apply((h) => setPieceColorAction(h, pieceId, color));
   }, [apply]);
 
-  const handleSetPieceTransform = useCallback((pieceId: string, tf: { position: [number, number, number]; quaternion: [number, number, number, number] }) => {
+  const handleSetPieceTransform = useCallback((pieceId: string, tf: SerializableTransform) => {
+    // P0-3: commit 时清空 live override,让 EditorCanvas 重新用 history.transforms
+    setLiveTransformOverride(null);
     // P0-3: 移动已连接子零件时明确选择"调整连接角度"或"断开后移动",禁止静默忽略
     const parentConn = findConnectionToParent(pieceId, project);
     if (parentConn) {
@@ -256,8 +260,10 @@ export function EditorWorkspace() {
   const handleSaveAs = useCallback(() => {
     const name = prompt('请输入新方案名称:', `${project.metadata.name} 副本`);
     if (!name?.trim()) return;
+    // P0-4: structuredClone 比 JSON 往返快,且语义清晰
+    const cloned = typeof structuredClone === 'function' ? structuredClone(project) : JSON.parse(JSON.stringify(project));
     const newProject: EditorProject = {
-      ...JSON.parse(JSON.stringify(project)),
+      ...cloned,
       id: `proj-${Date.now()}`,
       metadata: { ...project.metadata, name: name.trim() },
       createdAt: new Date().toISOString(),
@@ -467,6 +473,7 @@ export function EditorWorkspace() {
             onMovePieceCommit={handleSetPieceTransform}
             onCreateConnection={handleCreateConnection}
             cameraTargetRef={cameraTargetRef}
+            liveTransformOverride={liveTransformOverride}
           />
         </main>
 

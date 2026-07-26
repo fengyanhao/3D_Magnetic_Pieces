@@ -9,6 +9,7 @@ import {
   PieceTransform,
   ConnectorPort,
   Vec2,
+  ValidationIssueCode,
 } from './types';
 import { solveConnections, SolverContext, computeAllConnectionResiduals } from './solver';
 import { getPort } from './shapes';
@@ -62,9 +63,8 @@ function v3Normalize(a: Vec3): Vec3 {
   return v3Scale(a, 1 / len);
 }
 
-function vec3FromThree(v: Vector3): Vec3 {
-  return { x: v.x, y: v.y, z: v.z };
-}
+// P0-2: Vec3 接口结构兼容 three.Vector3,vec3FromThree 不再需要转换。
+// 旧调用点直接传 Vector3 给 Vec3 类型参数(TS 结构子类型自动接受)。
 
 function cross2(a: Vec2, b: Vec2): number {
   return a.x * b.y - a.y * b.x;
@@ -144,8 +144,9 @@ function buildConvexPrism(shape: ShapeDef, tf: PieceTransform): ConvexPrism {
   for (const v of shape.vertices) {
     const bottom = new Vector3(v.x, v.y, -halfThick).applyMatrix4(matrix);
     const top = new Vector3(v.x, v.y, halfThick).applyMatrix4(matrix);
-    bottomVerts.push(vec3FromThree(bottom));
-    topVerts.push(vec3FromThree(top));
+    // P0-2: Vector3 结构兼容 Vec3 接口,无需转换
+    bottomVerts.push(bottom);
+    topVerts.push(top);
   }
 
   const vertices = bottomVerts.concat(topVerts);
@@ -266,8 +267,9 @@ function getPortWorldEndpoints(
   if (!port) return null;
 
   const m = new Matrix4().compose(tf.position, tf.quaternion, new Vector3(1, 1, 1));
-  const p0 = vec3FromThree(new Vector3(port.p0.x, port.p0.y, 0).applyMatrix4(m));
-  const p1 = vec3FromThree(new Vector3(port.p1.x, port.p1.y, 0).applyMatrix4(m));
+  // P0-2: Vector3 直接当 Vec3 用,无需 vec3FromThree 转换
+  const p0 = new Vector3(port.p0.x, port.p0.y, 0).applyMatrix4(m);
+  const p1 = new Vector3(port.p1.x, port.p1.y, 0).applyMatrix4(m);
 
   let rp0 = p0, rp1 = p1;
   if (flip) {
@@ -276,7 +278,8 @@ function getPortWorldEndpoints(
   }
 
   const dir = v3Normalize(v3Sub(rp1, rp0));
-  const normal = vec3FromThree(new Vector3(0, 0, 1).applyQuaternion(tf.quaternion).normalize());
+  // P0-2: Vector3 直接当 Vec3 用
+  const normal = new Vector3(0, 0, 1).applyQuaternion(tf.quaternion).normalize();
 
   return { p0: rp0, p1: rp1, dir, normal };
 }
@@ -310,7 +313,7 @@ export function validatePhysicalModel(
   const modelId = model.id;
 
   if (model.pieces.length === 0) {
-    issues.push(issue(modelId, '模型没有定义任何零件'));
+    issues.push(issue(modelId, '模型没有定义任何零件', 'error', { code: 'other' }));
     return { valid: issues.length === 0, issues };
   }
 
@@ -325,7 +328,7 @@ export function validatePhysicalModel(
 
   const solverResult = solveConnections(ctx);
   if (solverResult.error) {
-    issues.push(issue(modelId, `约束求解失败: ${solverResult.error}`));
+    issues.push(issue(modelId, `约束求解失败: ${solverResult.error}`, 'error', { code: 'other' }));
     return { valid: issues.length === 0, issues };
   }
 
@@ -393,6 +396,7 @@ function checkPortOverlap(
             issue(modelId, `零件 ${p.id} 的边 ${edgeId} 上端口 ${curr.portId} 与 ${next.portId} 重叠`, 'error', {
               pieceId: p.id,
               edgeId,
+              code: ValidationIssueCode.PORT_OVERLAP,
             })
           );
         }
@@ -430,6 +434,7 @@ function checkPortReuse(
           pieceId,
           portId,
           edgeId,
+          code: ValidationIssueCode.PORT_REUSE,
         })
       );
     }
@@ -451,6 +456,7 @@ function checkLoopResiduals(
         issue(modelId, `闭环连接[${r.connectionIndex}]位置误差过大: ${r.positionError.toFixed(4)} (阈值 ${POSITION_ERROR_TOLERANCE})`, 'error', {
           connectionIndex: r.connectionIndex,
           pieceId: r.pieceA,
+          code: ValidationIssueCode.LOOP_POSITION_ERROR,
         })
       );
     }
@@ -460,6 +466,7 @@ function checkLoopResiduals(
         issue(modelId, `闭环连接[${r.connectionIndex}]方向对齐不良: 点积=${r.directionDot.toFixed(6)} (阈值 ${DIRECTION_DOT_TOLERANCE})`, 'error', {
           connectionIndex: r.connectionIndex,
           pieceId: r.pieceA,
+          code: ValidationIssueCode.LOOP_DIRECTION_ERROR,
         })
       );
     }
@@ -469,6 +476,7 @@ function checkLoopResiduals(
         issue(modelId, `闭环连接[${r.connectionIndex}]二面角误差过大: ${r.dihedralError.toFixed(4)}° (阈值 ${DIHEDRAL_ERROR_TOLERANCE}°)`, 'error', {
           connectionIndex: r.connectionIndex,
           pieceId: r.pieceA,
+          code: ValidationIssueCode.LOOP_DIHEDRAL_ERROR,
         })
       );
     }
@@ -490,11 +498,11 @@ function checkPortLengthCompatibility(
     const portB = getPort(shapeB, conn.portB);
 
     if (!portA) {
-      issues.push(issue(modelId, `Connection[${idx}] 引用了不存在的端口 ${conn.pieceA}:${conn.portA}`, 'error', { connectionIndex: idx, pieceId: conn.pieceA }));
+      issues.push(issue(modelId, `Connection[${idx}] 引用了不存在的端口 ${conn.pieceA}:${conn.portA}`, 'error', { connectionIndex: idx, pieceId: conn.pieceA, code: ValidationIssueCode.PORT_MISSING }));
       return;
     }
     if (!portB) {
-      issues.push(issue(modelId, `Connection[${idx}] 引用了不存在的端口 ${conn.pieceB}:${conn.portB}`, 'error', { connectionIndex: idx, pieceId: conn.pieceB }));
+      issues.push(issue(modelId, `Connection[${idx}] 引用了不存在的端口 ${conn.pieceB}:${conn.portB}`, 'error', { connectionIndex: idx, pieceId: conn.pieceB, code: ValidationIssueCode.PORT_MISSING }));
       return;
     }
 
@@ -507,6 +515,7 @@ function checkPortLengthCompatibility(
         issue(modelId, `Connection[${idx}] 端口长度不兼容: ${conn.pieceA}:${conn.portA}=${portA.length.toFixed(4)}, ${conn.pieceB}:${conn.portB}=${portB.length.toFixed(4)}, 差异率 ${(ratio * 100).toFixed(2)}%`, 'error', {
           connectionIndex: idx,
           pieceId: conn.pieceA,
+          code: ValidationIssueCode.PORT_LENGTH,
         })
       );
     }
@@ -545,7 +554,7 @@ function checkSingleConnectedComponent(
 
   if (visited.size !== pieces.length) {
     const missing = pieces.filter((p) => !visited.has(p.id)).map((p) => p.id);
-    issues.push(issue(modelId, `模型存在多个不连通分量，未连通的零件: ${missing.join(', ')}`, 'error'));
+    issues.push(issue(modelId, `模型存在多个不连通分量，未连通的零件: ${missing.join(', ')}`, 'error', { code: ValidationIssueCode.UNCONNECTED }));
   }
 }
 
@@ -578,7 +587,7 @@ function checkStepReachability(
     for (const pid of step.addedPieceIds) {
       if (!reachable.has(pid) && before.size > 0) {
         issues.push(
-          issue(modelId, `步骤 ${step.id} 中的零件 ${pid} 没有通过本步骤新增的连接连接到已有结构`, 'error', { stepId: step.id, pieceId: pid })
+          issue(modelId, `步骤 ${step.id} 中的零件 ${pid} 没有通过本步骤新增的连接连接到已有结构`, 'error', { stepId: step.id, pieceId: pid, code: ValidationIssueCode.STEP })
         );
       }
     }
@@ -594,13 +603,13 @@ function checkDihedralDegRange(
 ) {
   for (const conn of connections) {
     if (!isFinite(conn.dihedralDeg)) {
-      issues.push(issue(modelId, `连接中 dihedralDeg 不是有限数: ${conn.dihedralDeg}`, 'error'));
+      issues.push(issue(modelId, `连接中 dihedralDeg 不是有限数: ${conn.dihedralDeg}`, 'error', { code: ValidationIssueCode.DIHEDRAL_INVALID }));
       continue;
     }
     const normalized = ((conn.dihedralDeg % 360) + 360) % 360;
     const signedNormalized = normalized > 180 ? normalized - 360 : normalized;
     if (Math.abs(signedNormalized) > 180 + EPS) {
-      issues.push(issue(modelId, `连接中 dihedralDeg 超出合理范围 [-180, 180]: ${conn.dihedralDeg}`, 'error'));
+      issues.push(issue(modelId, `连接中 dihedralDeg 超出合理范围 [-180, 180]: ${conn.dihedralDeg}`, 'error', { code: ValidationIssueCode.DIHEDRAL_INVALID }));
     }
   }
 }
@@ -620,7 +629,7 @@ function checkPieceAddedOnce(
 
   for (const [pid, stepIds] of Object.entries(addedPieces)) {
     if (stepIds.length > 1) {
-      issues.push(issue(modelId, `零件 ${pid} 在多个步骤中被重复加入: 步骤 ${stepIds.join(', ')}`, 'error', { pieceId: pid }));
+      issues.push(issue(modelId, `零件 ${pid} 在多个步骤中被重复加入: 步骤 ${stepIds.join(', ')}`, 'error', { pieceId: pid, code: ValidationIssueCode.STEP }));
     }
   }
 }
@@ -644,23 +653,23 @@ function checkConnectionStepCoverage(
     for (const c of step.addedConnections) {
       const key = connectionKey(c);
       if (introducedConnections.has(key)) {
-        issues.push(issue(modelId, `连接 ${key} 在步骤 ${step.id} 中重复引入`, 'error', { stepId: step.id }));
+        issues.push(issue(modelId, `连接 ${key} 在步骤 ${step.id} 中重复引入`, 'error', { stepId: step.id, code: ValidationIssueCode.STEP }));
       }
 
       if (!presentPieces.has(c.pieceA) && !step.addedPieceIds.includes(c.pieceA)) {
-        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了未来零件 ${c.pieceA}`, 'error', { stepId: step.id, pieceId: c.pieceA }));
+        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了未来零件 ${c.pieceA}`, 'error', { stepId: step.id, pieceId: c.pieceA, code: ValidationIssueCode.STEP }));
       }
       if (!presentPieces.has(c.pieceB) && !step.addedPieceIds.includes(c.pieceB)) {
-        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了未来零件 ${c.pieceB}`, 'error', { stepId: step.id, pieceId: c.pieceB }));
+        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了未来零件 ${c.pieceB}`, 'error', { stepId: step.id, pieceId: c.pieceB, code: ValidationIssueCode.STEP }));
       }
 
       const shapeA = getShape(c.pieceA);
       const shapeB = getShape(c.pieceB);
       if (shapeA && !getPort(shapeA, c.portA)) {
-        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了不存在的端口 ${c.pieceA}:${c.portA}`, 'error', { stepId: step.id, pieceId: c.pieceA, portId: c.portA }));
+        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了不存在的端口 ${c.pieceA}:${c.portA}`, 'error', { stepId: step.id, pieceId: c.pieceA, portId: c.portA, code: ValidationIssueCode.PORT_MISSING }));
       }
       if (shapeB && !getPort(shapeB, c.portB)) {
-        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了不存在的端口 ${c.pieceB}:${c.portB}`, 'error', { stepId: step.id, pieceId: c.pieceB, portId: c.portB }));
+        issues.push(issue(modelId, `步骤 ${step.id} 的连接引用了不存在的端口 ${c.pieceB}:${c.portB}`, 'error', { stepId: step.id, pieceId: c.pieceB, portId: c.portB, code: ValidationIssueCode.PORT_MISSING }));
       }
 
       const inModel = model.connections.some((mc) => {
@@ -668,7 +677,7 @@ function checkConnectionStepCoverage(
         return mcKey === key;
       });
       if (!inModel) {
-        issues.push(issue(modelId, `步骤 ${step.id} 的连接 ${key} 不属于 model.connections`, 'error', { stepId: step.id }));
+        issues.push(issue(modelId, `步骤 ${step.id} 的连接 ${key} 不属于 model.connections`, 'error', { stepId: step.id, code: ValidationIssueCode.STEP }));
       }
 
       introducedConnections.add(key);
@@ -680,7 +689,7 @@ function checkConnectionStepCoverage(
   for (const c of model.connections) {
     const key = connectionKey(c);
     if (!introducedConnections.has(key)) {
-      issues.push(issue(modelId, `连接 ${key} 未在任何步骤中引入`, 'error'));
+      issues.push(issue(modelId, `连接 ${key} 未在任何步骤中引入`, 'error', { code: ValidationIssueCode.STEP }));
     }
   }
 }
@@ -734,6 +743,7 @@ function checkIntersectionsSAT(
         issues.push(
           issue(modelId, `零件 ${a} 与 ${b} 发生穿透 (完全重叠)`, 'error', {
             pieceId: a,
+            code: ValidationIssueCode.INTERSECTION,
           })
         );
         continue;
@@ -763,6 +773,7 @@ function checkIntersectionsSAT(
         issues.push(
           issue(modelId, `零件 ${a} 与 ${b} 发生穿透 (穿透深度 ${result.penetrationDepth.toFixed(4)})`, 'error', {
             pieceId: a,
+            code: ValidationIssueCode.INTERSECTION,
           })
         );
       }
@@ -799,7 +810,7 @@ function checkGroundPlaneWithThickness(
     }
 
     if (hasBelowGround) {
-      issues.push(issue(modelId, `零件 ${p.id} 的顶点低于地面 (最低 y=${lowestY.toFixed(4)})`, 'error', { pieceId: p.id }));
+      issues.push(issue(modelId, `零件 ${p.id} 的顶点低于地面 (最低 y=${lowestY.toFixed(4)})`, 'error', { pieceId: p.id, code: ValidationIssueCode.GROUND }));
     }
   }
 }
@@ -840,7 +851,7 @@ function checkSupportAndStabilityConvexHull(
   }
 
   if (grounded.size === 0) {
-    issues.push(issue(modelId, '没有零件接触地面，模型缺乏支撑', 'error'));
+    issues.push(issue(modelId, '没有零件接触地面，模型缺乏支撑', 'error', { code: ValidationIssueCode.STABILITY }));
     return;
   }
 
@@ -866,7 +877,7 @@ function checkSupportAndStabilityConvexHull(
 
   const unsupported = model.pieces.filter((p) => !supported.has(p.id)).map((p) => p.id);
   if (unsupported.length > 0) {
-    issues.push(issue(modelId, `以下零件缺乏到地面的支撑路径: ${unsupported.join(', ')}`, 'error'));
+    issues.push(issue(modelId, `以下零件缺乏到地面的支撑路径: ${unsupported.join(', ')}`, 'error', { code: ValidationIssueCode.STABILITY }));
   }
 
   let totalArea = 0;
@@ -911,14 +922,14 @@ function checkSupportAndStabilityConvexHull(
   }
 
   if (groundProjectionPoints.length < 3) {
-    issues.push(issue(modelId, '接地零件不足以形成支撑多边形', 'warning'));
+    issues.push(issue(modelId, '接地零件不足以形成支撑多边形', 'warning', { code: ValidationIssueCode.STABILITY }));
     return;
   }
 
   const supportHull = convexHull2D(groundProjectionPoints);
 
   if (supportHull.length < 3) {
-    issues.push(issue(modelId, '支撑区域凸包退化', 'warning'));
+    issues.push(issue(modelId, '支撑区域凸包退化', 'warning', { code: ValidationIssueCode.STABILITY }));
     return;
   }
 
@@ -926,7 +937,7 @@ function checkSupportAndStabilityConvexHull(
 
   if (!pointInConvexPolygon(centroidProjection, supportHull)) {
     issues.push(
-      issue(modelId, '加权重心投影在支撑凸包外，模型不稳定', 'error')
+      issue(modelId, '加权重心投影在支撑凸包外，模型不稳定', 'error', { code: ValidationIssueCode.STABILITY })
     );
   } else {
     let minDist = Infinity;
@@ -947,7 +958,7 @@ function checkSupportAndStabilityConvexHull(
     const hullSize = len2(sub2(supportHull[0], supportHull[Math.floor(n / 2)]));
     if (hullSize > 0 && minDist / hullSize < 0.1) {
       issues.push(
-        issue(modelId, `加权重心接近支撑边界 (距离 ${minDist.toFixed(3)})，存在倾倒风险`, 'warning')
+        issue(modelId, `加权重心接近支撑边界 (距离 ${minDist.toFixed(3)})，存在倾倒风险`, 'warning', { code: ValidationIssueCode.STABILITY })
       );
     }
   }
@@ -1022,7 +1033,7 @@ function checkPlanarityAllVertices(
     }
 
     if (maxDistance > PLANAR_DISTANCE_TOLERANCE) {
-      issues.push(issue(modelId, `零件 ${p.id} 顶点偏离公共平面 (最大距离 ${maxDistance.toFixed(4)})`, 'error', { pieceId: p.id }));
+      issues.push(issue(modelId, `零件 ${p.id} 顶点偏离公共平面 (最大距离 ${maxDistance.toFixed(4)})`, 'error', { pieceId: p.id, code: ValidationIssueCode.PLANARITY }));
     }
   }
 }

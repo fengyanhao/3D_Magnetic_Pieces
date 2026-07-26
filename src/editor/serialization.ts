@@ -138,7 +138,8 @@ export function modelToProject(model: Model): EditorProject {
     title: s.title ?? `步骤 ${idx + 1}`,
     description: s.description ?? '',
     parentGuide: s.parentGuide ?? '',
-    addedPieceIds: s.addedPieceIds ? [...s.addedPieceIds] : (s.addedPieces ?? []).map((p) => p.id),
+    // P0-1: 所有 v2 模型已统一使用 addedPieceIds,移除 v1 addedPieces 兼容降级
+    addedPieceIds: s.addedPieceIds ? [...s.addedPieceIds] : [],
     addedConnections: s.addedConnections ? s.addedConnections.map((c) => ({ ...c })) : [],
   }));
 
