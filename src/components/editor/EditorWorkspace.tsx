@@ -8,30 +8,53 @@ import {
   setPieceTransformAction, createConnectionAction, removeConnectionAction,
   updateConnectionAction, addStepAction, deleteStepAction, moveStepAction,
   updateStepAction, addPieceToStepAction, saveCameraPresetAction, updateMetadataAction,
+  // P1: 教学编排 actions
+  setStepCameraAction, captureCurrentViewAsStepCameraAction,
+  setPieceEntranceAction, batchSetEntranceTypeAction, patchPieceEntranceAction,
+  setStepHintAction, setStepFocusPointsAction, setPieceAnnotationAction,
+  removePieceFromStepAction,
+  // P2: 封面生成 action
+  setThumbnailDataUrlAction,
   EditorHistory,
 } from '../../editor/state';
 import { runValidation, EditorValidationResult } from '../../editor/validate';
-import { serializeProject, parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
+import { parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
 import { modelToProject } from '../../editor/serialization';
+import { resnapshotTransforms } from '../../editor/serialization';
+import {
+  serializeProjectAsScheme,
+  parseScheme,
+  schemeToEditorProject,
+} from '../../engine/scheme';
 import { EditorProject, SerializableTransform } from '../../editor/types';
 import { findConnectionToParent, computeDihedralFromMovedTransform } from '../../editor/snap';
-import { PieceTransform } from '../../engine/types';
+import {
+  PieceTransform, StepCamera, PieceEntranceConfig, EntranceType,
+} from '../../engine/types';
 import { models } from '../../data/models';
 import { Model } from '../../data/types';
-import { MagnetScene3D } from '../MagnetScene3D';
+import { TutorialPlayer } from '../tutorial/TutorialPlayer';
 import { EditorToolbar } from './EditorToolbar';
 import { PartLibrary } from './PartLibrary';
 import { EditorCanvas, type ToolMode } from './EditorCanvas';
 import { PropertyPanel } from './PropertyPanel';
 import { StepTimeline } from './StepTimeline';
 import { DraftManagerModal } from './DraftManagerModal';
+import { TutorialOrchestrationPanel } from './TutorialOrchestrationPanel';
+import { EditorSmallScreen } from './EditorSmallScreen';
+import { useViewportSize, EDITOR_MIN_DESKTOP_WIDTH } from '../../hooks/useViewportSize';
 import { useDraftStore } from './draftStore';
+import { renderProjectCover } from '../magnet3d/coverRenderer';
+import { Video, Box, Play } from 'lucide-react';
 
 export type Selection =
   | { kind: 'piece'; id: string }
   | { kind: 'connection'; index: number }
   | { kind: 'step'; id: number }
   | { kind: 'none' };
+
+/** P1: 编辑器工作模式 */
+export type EditorMode = 'structure' | 'tutorial';
 
 const VALIDATION_DEBOUNCE_MS = 400;
 
@@ -43,7 +66,11 @@ export function EditorWorkspace() {
   const [focusRequest, setFocusRequest] = useState<{ pieceId: string; ts: number } | null>(null);
   const [fitRequest, setFitRequest] = useState<{ ts: number } | null>(null);
   const [toolMode, setToolMode] = useState<ToolMode>('select');
+  // P1: 双模式切换 + 全屏预览
+  const [mode, setMode] = useState<EditorMode>('structure');
   const [previewMode, setPreviewMode] = useState(false);
+  // P1: 教学编排 - 录制模式(新增零件/连接自动归入当前步骤)
+  const [recordingStepId, setRecordingStepId] = useState<number | null>(null);
   const [message, setMessage] = useState<{ text: string; type: 'info' | 'error' | 'success' } | null>(null);
   // P0-5: 草稿管理面板 + 自动保存指示
   const [showDrafts, setShowDrafts] = useState(false);
@@ -57,6 +84,11 @@ export function EditorWorkspace() {
   const project = history.current;
   const draft = useDraftStore();
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
+  // P1: 获取 EditorCanvas 当前相机视图(用于"设为本步镜头")
+  const getCurrentViewRef = useRef<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>(null);
+  // P1: 小屏检测
+  const viewport = useViewportSize();
+  const isDesktop = viewport.width >= EDITOR_MIN_DESKTOP_WIDTH;
 
   // 首次加载:尝试恢复最近草稿
   useEffect(() => {
@@ -119,10 +151,16 @@ export function EditorWorkspace() {
     const target = cameraTargetRef.current;
     const placePos: [number, number, number] = [target.x, target.y, target.z];
     const { history: h, pieceId } = addPieceAction(history, shape, color, placePos);
-    setHistory(h);
+    // P1: 录制模式下,新零件自动归入当前录制步骤
+    let finalHistory = h;
+    if (recordingStepId !== null) {
+      finalHistory = addPieceToStepAction(h, recordingStepId, pieceId);
+      setMessage({ text: `已添加零件并自动加入步骤 #${recordingStepId}(录制中)`, type: 'success' });
+    }
+    setHistory(finalHistory);
     setSelection({ kind: 'piece', id: pieceId });
     setFocusRequest({ pieceId, ts: Date.now() });
-  }, [history]);
+  }, [history, recordingStepId]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selection.kind === 'piece') {
@@ -185,18 +223,17 @@ export function EditorWorkspace() {
 
   const handleCreateConnection = useCallback((conn: any) => {
     apply((h) => createConnectionAction(h, conn));
-    // 自动把连接加入当前步骤
-    if (currentStepId !== null) {
+    // P1: 录制模式下,新连接自动归入当前录制步骤
+    const targetStepId = recordingStepId ?? currentStepId;
+    if (targetStepId !== null) {
       apply((h) => {
-        // addConnectionToStepAction needs stepId and connection
-        // Import it dynamically to avoid circular deps complexity
-        const step = h.current.steps.find((s) => s.id === currentStepId);
+        const step = h.current.steps.find((s) => s.id === targetStepId);
         if (step) step.addedConnections.push(conn);
         return { ...h };
       });
       setMessage({ text: '已创建连接并加入当前步骤', type: 'success' });
     }
-  }, [apply, currentStepId]);
+  }, [apply, currentStepId, recordingStepId]);
 
   const handleUpdateConnection = useCallback((index: number, patch: any) => {
     apply((h) => updateConnectionAction(h, index, patch));
@@ -234,6 +271,81 @@ export function EditorWorkspace() {
     apply((h) => saveCameraPresetAction(h, preset).history);
     setMessage({ text: '已保存镜头预设', type: 'success' });
   }, [apply]);
+
+  /* ----------------- P1: 教学编排回调 ----------------- */
+
+  const handleSetStepCamera = useCallback((stepId: number, camera: StepCamera | null) => {
+    apply((h) => setStepCameraAction(h, stepId, camera));
+    setMessage({ text: camera ? '已设置本步镜头' : '已清除本步镜头', type: 'success' });
+  }, [apply]);
+
+  const handleCaptureCurrentViewAsStepCamera = useCallback((stepId: number, transitionMs: number) => {
+    const view = getCurrentViewRef.current?.();
+    if (!view) {
+      setMessage({ text: '无法获取当前视角,请先在 3D 画布中操作', type: 'error' });
+      return;
+    }
+    apply((h) => captureCurrentViewAsStepCameraAction(h, stepId, view, transitionMs));
+    setMessage({ text: '已将当前视角保存为本步镜头', type: 'success' });
+  }, [apply]);
+
+  const handlePatchPieceEntrance = useCallback((stepId: number, pieceId: string, patch: Partial<PieceEntranceConfig>) => {
+    apply((h) => patchPieceEntranceAction(h, stepId, pieceId, patch));
+  }, [apply]);
+
+  const handleBatchSetEntranceType = useCallback((stepId: number, pieceIds: string[], type: EntranceType) => {
+    apply((h) => batchSetEntranceTypeAction(h, stepId, pieceIds, type));
+    setMessage({ text: `已批量设置 ${pieceIds.length} 片零件入场类型`, type: 'success' });
+  }, [apply]);
+
+  const handleClearPieceEntrance = useCallback((stepId: number, pieceId: string) => {
+    apply((h) => setPieceEntranceAction(h, stepId, pieceId, null));
+  }, [apply]);
+
+  const handleSetStepHint = useCallback((stepId: number, hint: string) => {
+    apply((h) => setStepHintAction(h, stepId, hint));
+  }, [apply]);
+
+  const handleSetStepFocusPoints = useCallback((stepId: number, points: string[]) => {
+    apply((h) => setStepFocusPointsAction(h, stepId, points));
+  }, [apply]);
+
+  const handleSetStepHighlightMs = useCallback((stepId: number, ms: number) => {
+    apply((h) => updateStepAction(h, stepId, { highlightMs: ms }));
+  }, [apply]);
+
+  const handleSetStepSnapFeedback = useCallback((stepId: number, feedback: 'none' | 'pulse' | 'glow') => {
+    apply((h) => updateStepAction(h, stepId, { snapFeedback: feedback }));
+  }, [apply]);
+
+  const handleSetPieceAnnotation = useCallback((stepId: number, pieceId: string, text: string) => {
+    apply((h) => setPieceAnnotationAction(h, stepId, pieceId, text));
+  }, [apply]);
+
+  const handleRemovePieceFromStep = useCallback((stepId: number, pieceId: string) => {
+    apply((h) => removePieceFromStepAction(h, stepId, pieceId));
+    setMessage({ text: '已将零件移出本步', type: 'info' });
+  }, [apply]);
+
+  // P1: 录制模式开关
+  const handleToggleRecording = useCallback((stepId: number) => {
+    setRecordingStepId((cur) => (cur === stepId ? null : stepId));
+    setMessage({
+      text: recordingStepId === stepId ? '已停止录制' : `已开始录制到步骤 #${stepId},新零件和连接将自动加入`,
+      type: 'info',
+    });
+  }, [recordingStepId]);
+
+  // P1: 切换模式时停止录制
+  const handleModeChange = useCallback((newMode: EditorMode) => {
+    setMode(newMode);
+    if (recordingStepId !== null) setRecordingStepId(null);
+  }, [recordingStepId]);
+
+  // P1: 当前编辑器视图(供 TutorialOrchestrationPanel 显示)
+  const currentView = useMemo(() => {
+    return getCurrentViewRef.current?.() ?? null;
+  }, [project, mode]); // 依赖 project/mode 触发重新计算
 
   const handleUpdateMetadata = useCallback((patch: any) => {
     apply((h) => updateMetadataAction(h, patch));
@@ -343,7 +455,8 @@ export function EditorWorkspace() {
     if (validation && !validation.valid) {
       if (!confirm('方案未通过物理校验,仅可作为草稿导出。继续?')) return;
     }
-    const json = serializeProject(project);
+    // P0-3: 导出为 SchemeDef v3 JSON（唯一持久化格式）
+    const json = serializeProjectAsScheme(project);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -351,26 +464,39 @@ export function EditorWorkspace() {
     a.download = `${project.metadata.name || 'magnet-project'}.json`;
     a.click();
     URL.revokeObjectURL(url);
-    setMessage({ text: '已导出 JSON', type: 'success' });
+    setMessage({ text: '已导出 JSON (SchemeDef v3)', type: 'success' });
   }, [project, validation]);
 
   const handleImportFile = useCallback(async (file: File) => {
     try {
       const text = await file.text();
-      const result = parseProject(text);
-      if (result.errors.length > 0 || !result.project) {
-        setMessage({ text: '导入失败: ' + (result.errors[0] || '无法解析'), type: 'error' });
-        return;
+      // P0-3: 统一用 parseScheme 识别 v3/v1/v0，输出 SchemeDef v3
+      let importedProject: EditorProject;
+      let migrated = false;
+      try {
+        const scheme = parseScheme(text);
+        importedProject = schemeToEditorProject(scheme);
+        // 重新求解 transforms（持久化层不再保存这个）
+        importedProject.transforms = resnapshotTransforms(importedProject);
+        // 检测是否发生了 v1 → v3 迁移
+        migrated = text.includes('"schemaVersion":1') || text.includes('"schemaVersion": 1');
+      } catch (parseErr) {
+        // 兜底：尝试旧 parseProject（保留对历史格式的最大兼容）
+        const result = parseProject(text);
+        if (result.errors.length > 0 || !result.project) {
+          setMessage({ text: '导入失败: ' + (result.errors[0] || (parseErr as Error).message), type: 'error' });
+          return;
+        }
+        importedProject = result.project;
       }
       // 先保存当前项目快照
       await draft.save(project.id, project);
-      setHistory(replaceProject(history, result.project));
+      setHistory(replaceProject(history, importedProject));
       setSelection({ kind: 'none' });
       setCurrentStepId(null);
       setFitRequest({ ts: Date.now() });
-      const warnings = result.warnings.length;
       setMessage({
-        text: warnings > 0 ? `已导入方案(${warnings} 条迁移警告)` : '已导入方案',
+        text: migrated ? '已导入方案(已从 v1 迁移到 v3)' : '已导入方案',
         type: 'success',
       });
     } catch (e) {
@@ -383,6 +509,44 @@ export function EditorWorkspace() {
     setMessage({ text: '已完成物理校验', type: 'info' });
   }, [project]);
 
+  /* ----------------- P2: 生成真实 3D 渲染封面 ----------------- */
+  const [generatingCover, setGeneratingCover] = useState(false);
+  const handleGenerateCover = useCallback(async () => {
+    if (project.pieces.length === 0) {
+      setMessage({ text: '当前方案没有零件,无法生成封面', type: 'error' });
+      return;
+    }
+    setGeneratingCover(true);
+    try {
+      // 找到封面镜头预设(若存在)
+      const coverPresetId = project.metadata.coverCameraPresetId;
+      const coverPreset = coverPresetId
+        ? project.cameraPresets.find((p) => p.id === coverPresetId) ?? null
+        : null;
+      // 使用 requestAnimationFrame 让 UI 先更新到"生成中"状态
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+      const dataUrl = renderProjectCover(project, {
+        width: 512,
+        height: 512,
+        cameraPreset: coverPreset,
+        background: '#f0f9ff',
+      });
+      if (!dataUrl) {
+        setMessage({ text: '封面生成失败,请检查浏览器 WebGL 支持', type: 'error' });
+        return;
+      }
+      const newHistory = setThumbnailDataUrlAction(history, dataUrl, coverPresetId);
+      setHistory(newHistory);
+      setMessage({ text: '已生成 3D 渲染封面(512x512 PNG)', type: 'success' });
+    } catch (err) {
+      setMessage({ text: '封面生成失败: ' + (err as Error).message, type: 'error' });
+    } finally {
+      setGeneratingCover(false);
+    }
+  }, [history, project]);
+
+  const hasCover = !!project.thumbnail?.dataUrl;
+
   /* ----------------- 错误定位 ----------------- */
   const handleFocusError = useCallback((target: { pieceId?: string; connectionIndex?: number }) => {
     if (target.pieceId) {
@@ -393,10 +557,15 @@ export function EditorWorkspace() {
     }
   }, []);
 
-  // 预览模式
+  // P1: 小屏检测 - 视口宽度 < 1024px 时显示提示页
+  if (!isDesktop) {
+    return <EditorSmallScreen currentWidth={viewport.width} />;
+  }
+
+  // P1: 全屏预览(复用 TutorialPlayer,与用户端同一组件同一数据)
   if (previewMode) {
     return (
-      <PreviewMode
+      <TutorialPlayerFullscreenPreview
         project={project}
         onExit={() => setPreviewMode(false)}
       />
@@ -424,7 +593,62 @@ export function EditorWorkspace() {
         existingModels={models.map((m) => ({ id: m.id, name: m.name }))}
         toolMode={toolMode}
         onToolModeChange={setToolMode}
+        onGenerateCover={handleGenerateCover}
+        generatingCover={generatingCover}
+        hasCover={hasCover}
       />
+
+      {/* P1: 模式切换栏 */}
+      <div className="flex items-center gap-1 px-3 py-1 border-b bg-white flex-shrink-0">
+        <button
+          onClick={() => handleModeChange('structure')}
+          className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${
+            mode === 'structure'
+              ? 'bg-blue-500 text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+          data-testid="mode-structure"
+        >
+          <Box className="w-3.5 h-3.5" />
+          结构编辑
+        </button>
+        <button
+          onClick={() => handleModeChange('tutorial')}
+          className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${
+            mode === 'tutorial'
+              ? 'bg-purple-500 text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+          data-testid="mode-tutorial"
+        >
+          <Video className="w-3.5 h-3.5" />
+          教学编排
+        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {mode === 'tutorial' && currentStepId !== null && (
+            <button
+              onClick={() => handleToggleRecording(currentStepId)}
+              className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${
+                recordingStepId === currentStepId
+                  ? 'bg-red-500 text-white animate-pulse'
+                  : 'bg-red-50 text-red-600 hover:bg-red-100'
+              }`}
+              data-testid="record-toggle"
+            >
+              <span className={`w-2 h-2 rounded-full ${recordingStepId === currentStepId ? 'bg-white' : 'bg-red-500'}`} />
+              {recordingStepId === currentStepId ? '录制中(点击停止)' : '开始录制本步'}
+            </button>
+          )}
+          <button
+            onClick={() => setPreviewMode(true)}
+            className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+            data-testid="preview-button"
+          >
+            <Play className="w-3.5 h-3.5" />
+            全屏预览
+          </button>
+        </div>
+      </div>
 
       {/* P0-5: 草稿管理面板 */}
       {showDrafts && (
@@ -452,57 +676,105 @@ export function EditorWorkspace() {
         </div>
       )}
 
-      <div className="flex flex-1 min-h-0">
-        {/* 左:零件库 */}
-        <aside className="w-64 border-r bg-white overflow-y-auto flex-shrink-0">
-          <PartLibrary onAddPiece={handleAddPiece} project={project} />
-        </aside>
+      {mode === 'structure' ? (
+        /* ============ 结构编辑模式 ============ */
+        <div className="flex flex-1 min-h-0">
+          {/* 左:零件库 */}
+          <aside className="w-64 border-r bg-white overflow-y-auto flex-shrink-0">
+            <PartLibrary onAddPiece={handleAddPiece} project={project} />
+          </aside>
 
-        {/* 中:3D 画布 */}
-        <main className="flex-1 min-w-0 relative">
-          <EditorCanvas
-            project={project}
-            selection={selection}
-            toolMode={toolMode}
-            onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
-            onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
-            onClearSelection={() => setSelection({ kind: 'none' })}
-            focusRequest={focusRequest}
-            fitRequest={fitRequest}
-            onMovePiece={updatePieceTransformLive}
-            onMovePieceCommit={handleSetPieceTransform}
-            onCreateConnection={handleCreateConnection}
-            cameraTargetRef={cameraTargetRef}
-            liveTransformOverride={liveTransformOverride}
-          />
-        </main>
+          {/* 中:3D 画布 */}
+          <main className="flex-1 min-w-0 relative">
+            <EditorCanvas
+              project={project}
+              selection={selection}
+              toolMode={toolMode}
+              onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
+              onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
+              onClearSelection={() => setSelection({ kind: 'none' })}
+              focusRequest={focusRequest}
+              fitRequest={fitRequest}
+              onMovePiece={updatePieceTransformLive}
+              onMovePieceCommit={handleSetPieceTransform}
+              onCreateConnection={handleCreateConnection}
+              cameraTargetRef={cameraTargetRef}
+              liveTransformOverride={liveTransformOverride}
+              getCurrentViewRef={getCurrentViewRef}
+            />
+          </main>
 
-        {/* 右:属性 + 校验 */}
-        <aside className="w-80 border-l bg-white overflow-y-auto flex-shrink-0">
-          <PropertyPanel
-            project={project}
-            selection={selection}
-            validation={validation}
-            onSetPieceColor={handleSetPieceColor}
-            onDuplicatePiece={handleDuplicate}
-            onDeleteSelected={handleDeleteSelected}
-            onUpdateConnection={handleUpdateConnection}
-            onRemoveConnection={handleRemoveConnection}
-            onUpdateMetadata={handleUpdateMetadata}
-            onFocusError={handleFocusError}
-            onSaveCameraPreset={handleSaveCameraPreset}
-            currentStepId={currentStepId}
-            onAddPieceToStep={handleAddPieceToStep}
-            onUpdateStep={handleUpdateStep}
-            onSetPieceTransform={handleSetPieceTransform}
-            onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
-            onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
-          />
-        </aside>
-      </div>
+          {/* 右:属性 + 校验 */}
+          <aside className="w-80 border-l bg-white overflow-y-auto flex-shrink-0">
+            <PropertyPanel
+              project={project}
+              selection={selection}
+              validation={validation}
+              onSetPieceColor={handleSetPieceColor}
+              onDuplicatePiece={handleDuplicate}
+              onDeleteSelected={handleDeleteSelected}
+              onUpdateConnection={handleUpdateConnection}
+              onRemoveConnection={handleRemoveConnection}
+              onUpdateMetadata={handleUpdateMetadata}
+              onFocusError={handleFocusError}
+              onSaveCameraPreset={handleSaveCameraPreset}
+              currentStepId={currentStepId}
+              onAddPieceToStep={handleAddPieceToStep}
+              onUpdateStep={handleUpdateStep}
+              onSetPieceTransform={handleSetPieceTransform}
+              onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
+              onSelectConnection={(idx) => setSelection({ kind: 'connection', index: idx })}
+            />
+          </aside>
+        </div>
+      ) : (
+        /* ============ 教学编排模式 ============ */
+        <div className="flex flex-1 min-h-0">
+          {/* 左:TutorialPlayer 预览(复用正式播放器组件,同一份数据) */}
+          <main className="flex-1 min-w-0 relative bg-gray-900">
+            <TutorialPlayerInlinePreview
+              project={project}
+              initialStepIdx={(() => {
+                const idx = project.steps.findIndex((s) => s.id === currentStepId);
+                return idx >= 0 ? idx : 0;
+              })()}
+              onStepChange={(stepIdx: number) => {
+                // 同步时间轴选中
+                const step = project.steps[stepIdx];
+                if (step) {
+                  setCurrentStepId(step.id);
+                  setSelection({ kind: 'step', id: step.id });
+                }
+              }}
+            />
+          </main>
+
+          {/* 右:教学编排面板 */}
+          <aside className="w-[400px] border-l bg-white overflow-y-auto flex-shrink-0">
+            <TutorialOrchestrationPanel
+              project={project}
+              currentStepId={currentStepId}
+              currentView={currentView ?? undefined}
+              onSetStepCamera={handleSetStepCamera}
+              onCaptureCurrentViewAsStepCamera={handleCaptureCurrentViewAsStepCamera}
+              onPatchPieceEntrance={handlePatchPieceEntrance}
+              onBatchSetEntranceType={handleBatchSetEntranceType}
+              onClearPieceEntrance={handleClearPieceEntrance}
+              onSetStepHint={handleSetStepHint}
+              onSetStepFocusPoints={handleSetStepFocusPoints}
+              onSetStepHighlightMs={handleSetStepHighlightMs}
+              onSetStepSnapFeedback={handleSetStepSnapFeedback}
+              onSetPieceAnnotation={handleSetPieceAnnotation}
+              onRemovePieceFromStep={handleRemovePieceFromStep}
+              onAddPieceToStep={handleAddPieceToStep}
+              onSelectPiece={(id) => setSelection({ kind: 'piece', id })}
+            />
+          </aside>
+        </div>
+      )}
 
       {/* 下:步骤时间轴 */}
-      <div className="h-40 border-t bg-white flex-shrink-0">
+      <div className="h-44 border-t bg-white flex-shrink-0">
         <StepTimeline
           project={project}
           currentStepId={currentStepId}
@@ -510,6 +782,8 @@ export function EditorWorkspace() {
           onAddStep={handleAddStep}
           onDeleteStep={handleDeleteStep}
           onMoveStep={handleMoveStep}
+          validation={validation}
+          recordingStepId={recordingStepId}
         />
       </div>
 
@@ -520,65 +794,58 @@ export function EditorWorkspace() {
   );
 }
 
-/* ----------------- 预览模式(复用 MagnetScene3D,把 EditorProject 转回 Model) ----------------- */
-function PreviewMode({ project, onExit }: { project: EditorProject; onExit: () => void }) {
+/* ----------------- P1: 复用 TutorialPlayer 的预览组件 ----------------- */
+
+/** 内联预览(教学编排模式左侧使用,与正式播放器同组件同数据) */
+function TutorialPlayerInlinePreview({
+  project,
+  initialStepIdx,
+  onStepChange,
+}: {
+  project: EditorProject;
+  initialStepIdx: number;
+  onStepChange: (stepIdx: number) => void;
+}) {
   const model = useMemo(() => projectToModel(project) as Model, [project]);
-  // P1-8: 默认从第 1 步开始,提供"完整模型"入口
-  const [stepIdx, setStepIdx] = useState(0);
-  const [showFullModel, setShowFullModel] = useState(false);
+  return (
+    <TutorialPlayer
+      model={model}
+      initialStep={initialStepIdx}
+      onStepChange={onStepChange}
+      immersive
+      height="100%"
+    />
+  );
+}
 
-  const effectiveIdx = showFullModel ? -1 : stepIdx;
-  const hasSteps = model.steps.length > 0;
-  const atStart = !showFullModel && stepIdx <= 0;
-  const atEnd = !showFullModel && stepIdx >= model.steps.length - 1;
-
+/** 全屏预览(编辑器工具栏"预览"按钮使用,与用户端 TutorialPage 渲染结果逐像素接近) */
+function TutorialPlayerFullscreenPreview({
+  project,
+  onExit,
+}: {
+  project: EditorProject;
+  onExit: () => void;
+}) {
+  const model = useMemo(() => projectToModel(project) as Model, [project]);
   return (
     <div className="flex flex-col h-screen w-screen bg-white overflow-hidden">
       <div className="flex items-center justify-between px-4 py-2 border-b flex-shrink-0">
         <span className="font-semibold truncate">用户端预览 - {project.metadata.name}</span>
-        <div className="flex gap-2 flex-shrink-0">
-          <button
-            onClick={() => { setShowFullModel(false); setStepIdx(0); }}
-            disabled={!showFullModel && stepIdx === 0}
-            className={`px-3 py-1 rounded text-sm ${(!showFullModel && stepIdx === 0) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
-          >
-            回到第1步
-          </button>
-          <button
-            onClick={() => setStepIdx(Math.max(0, stepIdx - 1))}
-            disabled={atStart}
-            className={`px-3 py-1 rounded text-sm ${atStart ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
-          >
-            上一步
-          </button>
-          <span className="px-3 py-1 text-sm text-gray-600">
-            {showFullModel ? '完整模型' : hasSteps ? `${stepIdx + 1} / ${model.steps.length}` : '无步骤'}
-          </span>
-          <button
-            onClick={() => { if (showFullModel) { setShowFullModel(false); setStepIdx(model.steps.length - 1); } else { setStepIdx(Math.min(model.steps.length - 1, stepIdx + 1)); } }}
-            disabled={atEnd && !showFullModel}
-            className={`px-3 py-1 rounded text-sm ${(atEnd && !showFullModel) ? 'bg-gray-100 text-gray-400 cursor-not-allowed' : 'bg-gray-100 hover:bg-gray-200'}`}
-          >
-            下一步
-          </button>
-          <button
-            onClick={() => setShowFullModel(!showFullModel)}
-            className={`px-3 py-1 rounded text-sm ${showFullModel ? 'bg-blue-500 text-white' : 'bg-gray-100 hover:bg-gray-200'}`}
-          >
-            {showFullModel ? '退出完整模型' : '完整模型'}
-          </button>
-          <button onClick={onExit} className="px-3 py-1 bg-blue-500 text-white rounded text-sm">退出预览</button>
-        </div>
+        <button
+          onClick={onExit}
+          className="px-3 py-1 bg-blue-500 text-white rounded text-sm hover:bg-blue-600"
+          data-testid="exit-preview"
+        >
+          退出预览
+        </button>
       </div>
       <div className="flex-1 min-h-0 overflow-hidden">
-        <MagnetScene3D model={model} stepIndex={effectiveIdx} highlightNew interactive />
+        <TutorialPlayer
+          model={model}
+          immersive
+          height="100%"
+        />
       </div>
-      {!showFullModel && hasSteps && model.steps[stepIdx] && (
-        <div className="p-4 border-t bg-gray-50 flex-shrink-0">
-          <h3 className="font-semibold">{model.steps[stepIdx].title}</h3>
-          <p className="text-sm text-gray-600 mt-1">{model.steps[stepIdx].description}</p>
-        </div>
-      )}
     </div>
   );
 }

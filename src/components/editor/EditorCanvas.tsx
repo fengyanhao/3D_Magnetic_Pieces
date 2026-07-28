@@ -1,11 +1,12 @@
 import { useRef, useMemo, useEffect, useCallback, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, ContactShadows, Line, TransformControls, GizmoHelper, GizmoViewcube } from '@react-three/drei';
+import { OrbitControls, Line, TransformControls, GizmoHelper, GizmoViewcube } from '@react-three/drei';
 import * as THREE from 'three';
 import { MagnetColor } from '../../data/types';
 import { getShapeDef } from '../../engine/shapes';
 import { Connection } from '../../engine/types';
 import { MagnetPieceMesh } from '../magnet3d/primitives';
+import { SceneLighting, defaultGLProps } from '../magnet3d/SceneLighting';
 import { EditorProject, SerializableTransform } from '../../editor/types';
 import { getDisplayTransforms, findCompatibleTargets, buildPortUsage, findBestSnapCandidate } from '../../editor/snap';
 import { computeFitCamera, applyFitResult, pieceWorldVertices } from '../magnet3d/cameraUtils';
@@ -28,6 +29,8 @@ interface Props {
   cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
   /** P0-3: 拖拽期间的实时变换覆盖(只覆盖单个 piece),避免重算 solver */
   liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
+  /** P1: 获取当前相机视图(position/target/zoom)的 ref,用于"设为本步镜头" */
+  getCurrentViewRef?: React.MutableRefObject<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>;
 }
 
 interface DefaultCameraState {
@@ -42,7 +45,7 @@ const SNAP_PIXEL_THRESHOLD = 28; // 屏幕像素阈值
 function SceneContent({
   project, selection, toolMode, onSelectPiece, onSelectConnection, focusRequest, fitRequest,
   onMovePiece, onMovePieceCommit, onCreateConnection, defaultCameraStateRef, resetViewRef,
-  fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef, liveTransformOverride,
+  fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef, liveTransformOverride, getCurrentViewRef,
 }: {
   project: EditorProject;
   selection: Selection;
@@ -62,6 +65,7 @@ function SceneContent({
   setViewRef: React.MutableRefObject<((view: string) => void) | null>;
   cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
   liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
+  getCurrentViewRef?: React.MutableRefObject<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>;
 }) {
   const partMap = useMemo(() => {
     const m: Record<string, EditorProject['parts'][number]> = {};
@@ -233,6 +237,23 @@ function SceneContent({
   useEffect(() => { fitAllRef.current = fitAll; }, [fitAll, fitAllRef]);
   useEffect(() => { fitSelectionRef.current = fitSelection; }, [fitSelection, fitSelectionRef]);
   useEffect(() => { setViewRef.current = setView; }, [setView, setViewRef]);
+
+  // P1: 暴露当前相机视图 getter,用于"设为本步镜头"
+  const getCurrentView = useCallback(():
+    | { position: [number, number, number]; target: [number, number, number]; zoom: number }
+    | null => {
+    if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return null;
+    const ortho = camera as THREE.OrthographicCamera;
+    const target = controlsRef.current?.target ?? cameraTargetRef.current;
+    return {
+      position: [ortho.position.x, ortho.position.y, ortho.position.z],
+      target: [target.x, target.y, target.z],
+      zoom: ortho.zoom,
+    };
+  }, [camera, cameraTargetRef]);
+  useEffect(() => {
+    if (getCurrentViewRef) getCurrentViewRef.current = getCurrentView;
+  }, [getCurrentView, getCurrentViewRef]);
 
   /* ---- 键盘快捷键(输入框聚焦时禁用) ---- */
   useEffect(() => {
@@ -409,110 +430,100 @@ function SceneContent({
 
   return (
     <>
-      <ambientLight intensity={0.6} />
-      <directionalLight
-        position={[5, 10, 5]}
-        intensity={1.2}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-      />
-      <directionalLight position={[-3, 5, -3]} intensity={0.4} />
+      <SceneLighting shadowScale={20} shadowOpacity={0.3}>
+        <gridHelper args={[20, 20, '#cbd5e1', '#e2e8f0']} position={[0, -0.01, 0]} />
 
-      <gridHelper args={[20, 20, '#cbd5e1', '#e2e8f0']} position={[0, -0.01, 0]} />
-
-      {/* 磁力片 */}
-      {project.pieces.map((piece) => {
-        const tf = transforms[piece.id];
-        const part = partMap[piece.partId];
-        if (!tf || !part) return null;
-        const shape = getShapeDef(part.shape);
-        if (!shape) return null;
-        const isSelected = selection.kind === 'piece' && selection.id === piece.id;
-        const isDimmed = selection.kind === 'piece' && selection.id !== piece.id;
-        const isHovered = hoveredPiece === piece.id;
-        const isSnapGhost = snapPreview !== null && piece.id === selectedPieceId;
-        return (
-          <MagnetPieceMesh
-            key={piece.id}
-            shape={shape}
-            transform={isSnapGhost ? { position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) } : tf}
-            color={part.color as MagnetColor}
-            selected={isSelected}
-            highlighted={isHovered && !isSelected}
-            dimmed={isDimmed}
-            opacity={isSnapGhost ? 0.4 : 1}
-            onClick={(e: any) => {
-              e.stopPropagation();
-              onSelectPiece(piece.id);
-            }}
-            onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; setHoveredPiece(piece.id); }}
-            onPointerOut={() => { document.body.style.cursor = 'default'; setHoveredPiece(null); }}
-          />
-        );
-      })}
-
-      {/* 吸附预览(半透明 ghost) */}
-      {snapPreview && selectedPieceId && (() => {
-        const piece = pieceMap[selectedPieceId];
-        const part = piece ? partMap[piece.partId] : null;
-        const shape = part ? getShapeDef(part.shape) : null;
-        if (!shape) return null;
-        return (
-          <MagnetPieceMesh
-            shape={shape}
-            transform={{ position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) }}
-            color={(partMap[piece!.partId]?.color ?? 'blue') as MagnetColor}
-            opacity={0.35}
-          />
-        );
-      })()}
-
-      {/* 选中 piece 的端口可视化 */}
-      {selection.kind === 'piece' && (() => {
-        const piece = pieceMap[selection.id];
-        const part = piece ? partMap[piece.partId] : null;
-        const shape = part ? getShapeDef(part.shape) : null;
-        const tf = transforms[selection.id];
-        if (!shape || !tf) return null;
-        const matrix = new THREE.Matrix4().compose(tf.position, tf.quaternion, new THREE.Vector3(1, 1, 1));
-        return shape.ports.map((port) => {
-          const isUsed = portUsage.has(`${piece!.id}:${port.portId}`);
-          const isCompatible = compatibleTargets.has(`${piece!.id}:${port.portId}`);
-          const p0 = new THREE.Vector3(port.p0.x, port.p0.y, 0).applyMatrix4(matrix);
-          const p1 = new THREE.Vector3(port.p1.x, port.p1.y, 0).applyMatrix4(matrix);
-          const color = isUsed ? '#ef4444' : isCompatible ? '#22c55e' : '#3b82f6';
+        {/* 磁力片 */}
+        {project.pieces.map((piece) => {
+          const tf = transforms[piece.id];
+          const part = partMap[piece.partId];
+          if (!tf || !part) return null;
+          const shape = getShapeDef(part.shape);
+          if (!shape) return null;
+          const isSelected = selection.kind === 'piece' && selection.id === piece.id;
+          const isDimmed = selection.kind === 'piece' && selection.id !== piece.id;
+          const isHovered = hoveredPiece === piece.id;
+          const isSnapGhost = snapPreview !== null && piece.id === selectedPieceId;
           return (
-            <Line key={port.portId} points={[p0, p1]} color={color} lineWidth={4} />
-          );
-        });
-      })()}
-
-      {/* 连接可视化(可点击) */}
-      {project.connections.map((conn, idx) => {
-        const tfA = transforms[conn.pieceA];
-        const tfB = transforms[conn.pieceB];
-        if (!tfA || !tfB) return null;
-        const isSelected = selection.kind === 'connection' && selection.index === idx;
-        const mid = tfA.position.clone().add(tfB.position).multiplyScalar(0.5);
-        return (
-          <group key={`conn-${idx}`} onClick={(e: any) => handleConnectionClick(idx, e)}>
-            <Line
-              points={[tfA.position, tfB.position]}
-              color={isSelected ? '#f59e0b' : '#94a3b8'}
-              lineWidth={isSelected ? 3 : 2}
-              dashed={!isSelected}
+            <MagnetPieceMesh
+              key={piece.id}
+              shape={shape}
+              transform={isSnapGhost ? { position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) } : tf}
+              color={part.color as MagnetColor}
+              selected={isSelected}
+              highlighted={isHovered && !isSelected}
+              dimmed={isDimmed}
+              opacity={isSnapGhost ? 0.4 : 1}
+              onClick={(e: any) => {
+                e.stopPropagation();
+                onSelectPiece(piece.id);
+              }}
+              onPointerOver={(e: any) => { e.stopPropagation(); document.body.style.cursor = 'pointer'; setHoveredPiece(piece.id); }}
+              onPointerOut={() => { document.body.style.cursor = 'default'; setHoveredPiece(null); }}
             />
-            {/* 可点击的透明小球 */}
-            <mesh position={mid}>
-              <sphereGeometry args={[0.15, 8, 8]} />
-              <meshBasicMaterial color={isSelected ? '#f59e0b' : '#64748b'} transparent opacity={0.6} />
-            </mesh>
-          </group>
-        );
-      })}
+          );
+        })}
 
-      <ContactShadows position={[0, 0.01, 0]} opacity={0.3} scale={20} blur={2} far={4} />
+        {/* 吸附预览(半透明 ghost) */}
+        {snapPreview && selectedPieceId && (() => {
+          const piece = pieceMap[selectedPieceId];
+          const part = piece ? partMap[piece.partId] : null;
+          const shape = part ? getShapeDef(part.shape) : null;
+          if (!shape) return null;
+          return (
+            <MagnetPieceMesh
+              shape={shape}
+              transform={{ position: new THREE.Vector3(snapPreview.position[0], snapPreview.position[1], snapPreview.position[2]), quaternion: new THREE.Quaternion(snapPreview.quaternion[0], snapPreview.quaternion[1], snapPreview.quaternion[2], snapPreview.quaternion[3]) }}
+              color={(partMap[piece!.partId]?.color ?? 'blue') as MagnetColor}
+              opacity={0.35}
+            />
+          );
+        })()}
+
+        {/* 选中 piece 的端口可视化 */}
+        {selection.kind === 'piece' && (() => {
+          const piece = pieceMap[selection.id];
+          const part = piece ? partMap[piece.partId] : null;
+          const shape = part ? getShapeDef(part.shape) : null;
+          const tf = transforms[selection.id];
+          if (!shape || !tf) return null;
+          const matrix = new THREE.Matrix4().compose(tf.position, tf.quaternion, new THREE.Vector3(1, 1, 1));
+          return shape.ports.map((port) => {
+            const isUsed = portUsage.has(`${piece!.id}:${port.portId}`);
+            const isCompatible = compatibleTargets.has(`${piece!.id}:${port.portId}`);
+            const p0 = new THREE.Vector3(port.p0.x, port.p0.y, 0).applyMatrix4(matrix);
+            const p1 = new THREE.Vector3(port.p1.x, port.p1.y, 0).applyMatrix4(matrix);
+            const color = isUsed ? '#ef4444' : isCompatible ? '#22c55e' : '#3b82f6';
+            return (
+              <Line key={port.portId} points={[p0, p1]} color={color} lineWidth={4} />
+            );
+          });
+        })()}
+
+        {/* 连接可视化(可点击) */}
+        {project.connections.map((conn, idx) => {
+          const tfA = transforms[conn.pieceA];
+          const tfB = transforms[conn.pieceB];
+          if (!tfA || !tfB) return null;
+          const isSelected = selection.kind === 'connection' && selection.index === idx;
+          const mid = tfA.position.clone().add(tfB.position).multiplyScalar(0.5);
+          return (
+            <group key={`conn-${idx}`} onClick={(e: any) => handleConnectionClick(idx, e)}>
+              <Line
+                points={[tfA.position, tfB.position]}
+                color={isSelected ? '#f59e0b' : '#94a3b8'}
+                lineWidth={isSelected ? 3 : 2}
+                dashed={!isSelected}
+              />
+              {/* 可点击的透明小球 */}
+              <mesh position={mid}>
+                <sphereGeometry args={[0.15, 8, 8]} />
+                <meshBasicMaterial color={isSelected ? '#f59e0b' : '#64748b'} transparent opacity={0.6} />
+              </mesh>
+            </group>
+          );
+        })}
+      </SceneLighting>
 
       <OrbitControls
         ref={controlsRef}
@@ -566,7 +577,7 @@ function worldToScreen(worldPos: THREE.Vector3, camera: THREE.Camera, size: { wi
 export function EditorCanvas({
   project, selection, toolMode, onSelectPiece, onSelectConnection, onClearSelection,
   focusRequest, fitRequest, onMovePiece, onMovePieceCommit, onCreateConnection, cameraTargetRef,
-  liveTransformOverride,
+  liveTransformOverride, getCurrentViewRef,
 }: Props) {
   const defaultCameraStateRef = useRef<DefaultCameraState | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
@@ -586,7 +597,7 @@ export function EditorCanvas({
         shadows="percentage"
         dpr={[1, 2]}
         style={{ width: '100%', height: '100%' }}
-        gl={{ antialias: true }}
+        gl={{ ...defaultGLProps }}
         onPointerMissed={onClearSelection}
       >
         <SceneContent
@@ -608,6 +619,7 @@ export function EditorCanvas({
           setViewRef={setViewRef}
           cameraTargetRef={cameraTargetRef}
           liveTransformOverride={liveTransformOverride}
+          getCurrentViewRef={getCurrentViewRef}
         />
       </Canvas>
 

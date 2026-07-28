@@ -1,9 +1,20 @@
 import { EditorProject } from '../../editor/types';
-import { serializeProject, parseProject } from '../../editor/serialization';
+import {
+  serializeProjectAsScheme,
+  parseScheme,
+  schemeToEditorProject,
+} from '../../engine/scheme';
+import { resnapshotTransforms } from '../../editor/serialization';
 
 /**
- * IndexedDB 草稿存储。
- * MVP 阶段使用 localStorage 兜底(IndexedDB 可选)。
+ * IndexedDB 草稿存储（P0-3: 持久化格式已切换为 SchemeDef v3）。
+ *
+ * - 保存：EditorProject → SchemeDef v3 → JSON
+ * - 加载：JSON → SchemeDef v3（自动识别旧 v1 并迁移）→ EditorProject（运行时视图）
+ * - 旧 v1 草稿在加载时一次性升级，回写为 v3
+ * - transforms / validationInfo 不持久化，加载后由 solver / validator 重新推导
+ *
+ * MVP 阶段使用 localStorage 兜底（IndexedDB 可选）。
  */
 
 const LS_PREFIX = 'magnet-editor-draft:';
@@ -17,7 +28,8 @@ export interface DraftStore {
 
 function saveToLocalStorage(key: string, project: EditorProject): void {
   try {
-    const json = serializeProject(project);
+    // P0-3: 持久化为 SchemeDef v3 JSON
+    const json = serializeProjectAsScheme(project);
     localStorage.setItem(LS_PREFIX + key, json);
   } catch (e) {
     console.warn('草稿保存失败:', e);
@@ -28,8 +40,20 @@ function loadFromLocalStorage(key: string): EditorProject | null {
   try {
     const json = localStorage.getItem(LS_PREFIX + key);
     if (!json) return null;
-    const r = parseProject(json);
-    return r.project;
+    // P0-3: 自动识别 v3 / v1，旧 v1 草稿会被一次性迁移
+    const scheme = parseScheme(json);
+    const project = schemeToEditorProject(scheme);
+    // 重新求解 transforms（持久化层不再保存这个）
+    project.transforms = resnapshotTransforms(project);
+    // 如果原数据是 v1，回写为 v3，避免下次再走迁移路径
+    if (json.includes('"schemaVersion":1') || json.includes('"schemaVersion": 1')) {
+      try {
+        localStorage.setItem(LS_PREFIX + key, serializeProjectAsScheme(project));
+      } catch {
+        // 回写失败不影响加载
+      }
+    }
+    return project;
   } catch (e) {
     console.warn('草稿加载失败:', e);
     return null;

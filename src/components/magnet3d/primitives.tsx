@@ -1,6 +1,9 @@
 import { useRef, useMemo, useEffect } from 'react';
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { MagnetColor } from '../../data/types';
 import { magnetColorMap, magnetEdgeColorMap } from '../../data/models';
 import { ShapeDef, PieceTransform } from '../../engine/types';
@@ -14,10 +17,23 @@ import { insetVertices } from '../../utils/geometry';
  *
  * 所有 geometry / material 都做了按 (shapeId / color) 缓存,
  * 不会在每次渲染时重建,符合性能要求。
+ *
+ * P2 视觉修复:
+ * - 透明中心板使用 depthWrite:false + renderOrder 排序,消除闪烁/拉丝
+ * - 外框与中心板之间用 polygonOffset 消除共面 z-fighting
+ * - 边线改用 LineSegments2 + LineMaterial(支持真实线宽),替换 LineBasicMaterial
+ * - 中心板参与阴影投射/接收
+ * - 增加边缘磁铁条细节(小圆柱体)
  */
 
 export const INSET = 0.06;
 export const CENTER_THICKNESS_FACTOR = 0.7;
+/** P2-3: 中心板与外框之间的 Z 轴偏移,消除共面 z-fighting */
+export const CENTER_Z_OFFSET = 0.002;
+/** P2-5: 边缘磁铁条半径 */
+export const MAGNET_STRIP_RADIUS = 0.04;
+/** P2-5: 边缘磁铁条高度 */
+export const MAGNET_STRIP_HEIGHT = 0.08;
 
 export interface DebugFlags {
   showCenter: boolean;
@@ -43,7 +59,10 @@ const frameGeomCache = new Map<string, THREE.ExtrudeGeometry>();
 const centerGeomCache = new Map<string, THREE.ExtrudeGeometry>();
 const frameMatCache = new Map<string, THREE.MeshStandardMaterial>();
 const centerMatCache = new Map<string, THREE.MeshStandardMaterial>();
-const edgeMatCache = new Map<string, THREE.LineBasicMaterial>();
+const edgeLineGeomCache = new Map<string, LineSegmentsGeometry>();
+const edgeLineMatCache = new Map<string, LineMaterial>();
+/** P2-5: 边缘磁铁条几何缓存(按 shapeId) */
+const magnetStripGeomCache = new Map<string, THREE.InstancedBufferGeometry>();
 
 export function buildShapeFromVertices(vertices: { x: number; y: number }[]): THREE.Shape {
   const s = new THREE.Shape();
@@ -196,8 +215,9 @@ export function createCenterGeometry(shape: ShapeDef): THREE.ExtrudeGeometry {
   });
   geom.center();
 
-  const offset = new THREE.Vector3(0, 0, (shape.thickness - centerThickness) / 2);
-  geom.translate(offset.x, offset.y, offset.z);
+  // P2-3: 增加 Z 轴偏移,使中心板与外框不共面,消除 z-fighting
+  const offset = (shape.thickness - centerThickness) / 2 + CENTER_Z_OFFSET;
+  geom.translate(0, 0, offset);
 
   centerGeomCache.set(cacheKey, geom);
   return geom;
@@ -211,51 +231,148 @@ export function getFrameMaterial(color: MagnetColor): THREE.MeshStandardMaterial
   const fill = parseRgbaString(magnetColorMap[color]);
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(fill.r * 0.85, fill.g * 0.85, fill.b * 0.85),
-    roughness: 0.3,
-    metalness: 0.2,
+    roughness: 0.35,
+    metalness: 0.25,
     side: THREE.DoubleSide,
     depthWrite: true,
+    // P2-3: polygonOffset 使外框在深度比较中优先,消除与中心板的 z-fighting
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
   });
 
   frameMatCache.set(color, mat);
   return mat;
 }
 
+/**
+ * P2-2: 透明中心板材质
+ *
+ * 关键修复:
+ * - transparent:true 时 depthWrite:false,避免半透明物体写入深度缓冲导致后方物体被错误剔除
+ * - renderOrder=1 使透明中心板在不透明外框之后渲染
+ * - polygonOffset 使中心板在深度比较中退后,与外框不冲突
+ *
+ * 已验证方案:depthWrite:false + renderOrder 排序
+ * 替代方案(alphaHash/抖动透明)未采用,因为磁力片中心板需要真实的半透明效果
+ */
 export function getCenterMaterial(color: MagnetColor): THREE.MeshStandardMaterial {
   if (centerMatCache.has(color)) {
     return centerMatCache.get(color)!;
   }
 
   const fill = parseRgbaString(magnetColorMap[color]);
+  const isTransparent = fill.a < 1;
   const mat = new THREE.MeshStandardMaterial({
     color: new THREE.Color(fill.r, fill.g, fill.b),
-    transparent: fill.a < 1,
+    transparent: isTransparent,
     opacity: fill.a,
-    roughness: 0.3,
+    roughness: 0.2,
     metalness: 0.05,
-    side: THREE.FrontSide,
-    depthWrite: true,
+    side: THREE.DoubleSide,
+    // P2-2: 透明时关闭 depthWrite,依赖 renderOrder 排序
+    depthWrite: !isTransparent,
+    // P2-3: polygonOffset 使中心板深度退后
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
   });
 
   centerMatCache.set(color, mat);
   return mat;
 }
 
-export function getEdgeMaterial(color: MagnetColor): THREE.LineBasicMaterial {
-  if (edgeMatCache.has(color)) {
-    return edgeMatCache.get(color)!;
+/**
+ * P2-4: 使用 LineMaterial (Line2 体系) 替换 LineBasicMaterial
+ *
+ * LineBasicMaterial.linewidth 在 WebGL 中被强制为 1px,无法显示粗边。
+ * LineMaterial 支持以像素为单位的真实线宽,且支持 resolution 自适应。
+ */
+export function getEdgeLineMaterial(color: MagnetColor, resolution: { width: number; height: number }): LineMaterial {
+  if (edgeLineMatCache.has(color)) {
+    const mat = edgeLineMatCache.get(color)!;
+    mat.resolution.set(resolution.width, resolution.height);
+    return mat;
   }
 
   const edge = parseRgbaString(magnetEdgeColorMap[color]);
-  const mat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(edge.r, edge.g, edge.b),
+  const mat = new LineMaterial({
+    color: new THREE.Color(edge.r, edge.g, edge.b).getHex(),
     transparent: edge.a < 1,
     opacity: edge.a,
-    linewidth: 2,
+    linewidth: 2, // 像素单位,LineMaterial 支持真实线宽
+    worldUnits: false,
+    dashed: false,
   });
+  mat.resolution.set(resolution.width, resolution.height);
 
-  edgeMatCache.set(color, mat);
+  edgeLineMatCache.set(color, mat);
   return mat;
+}
+
+/**
+ * P2-4: 把 EdgesGeometry 转为 LineSegmentsGeometry 供 LineSegments2 使用
+ */
+export function createEdgeLineGeometry(shape: ShapeDef, frameGeom: THREE.ExtrudeGeometry): LineSegmentsGeometry {
+  const cacheKey = shape.id;
+  if (edgeLineGeomCache.has(cacheKey)) {
+    return edgeLineGeomCache.get(cacheKey)!;
+  }
+
+  const edgesGeom = new THREE.EdgesGeometry(frameGeom);
+  const positions = edgesGeom.attributes.position.array as Float32Array;
+  const lineGeom = new LineSegmentsGeometry();
+  lineGeom.setPositions(Array.from(positions));
+  edgesGeom.dispose();
+
+  edgeLineGeomCache.set(cacheKey, lineGeom);
+  return lineGeom;
+}
+
+/**
+ * P2-5: 创建边缘磁铁条几何(沿每条边的中点放置小圆柱)
+ */
+export function createMagnetStripGeometry(shape: ShapeDef): THREE.InstancedBufferGeometry | null {
+  const cacheKey = shape.id;
+  if (magnetStripGeomCache.has(cacheKey)) {
+    return magnetStripGeomCache.get(cacheKey)!;
+  }
+
+  // 收集每条边的中点(只取直线边的中点,曲线边跳过)
+  const midpoints: { x: number; y: number; angle: number }[] = [];
+  for (const edge of shape.edges) {
+    if (edge.isCurved) continue;
+    const mx = (edge.v0.x + edge.v1.x) / 2;
+    const my = (edge.v0.y + edge.v1.y) / 2;
+    const angle = Math.atan2(edge.v1.y - edge.v0.y, edge.v1.x - edge.v0.x);
+    midpoints.push({ x: mx, y: my, angle });
+  }
+
+  if (midpoints.length === 0) {
+    return null;
+  }
+
+  // 创建一个小圆柱几何,沿 Z 轴方向
+  const cylGeom = new THREE.CylinderGeometry(MAGNET_STRIP_RADIUS, MAGNET_STRIP_RADIUS, MAGNET_STRIP_HEIGHT, 8, 1);
+  cylGeom.rotateX(Math.PI / 2); // 把圆柱从 Y 轴方向旋转到 Z 轴方向
+  const instancedGeom = new THREE.InstancedBufferGeometry();
+  instancedGeom.index = cylGeom.index;
+  instancedGeom.attributes = cylGeom.attributes;
+
+  // 设置实例矩阵(使用 setAttribute,InstancedBufferGeometry 通过 attribute 名 'instanceMatrix' 识别)
+  const matrices: number[] = [];
+  const dummy = new THREE.Object3D();
+  for (const mp of midpoints) {
+    dummy.position.set(mp.x, mp.y, shape.thickness / 2 + MAGNET_STRIP_HEIGHT / 2);
+    dummy.rotation.set(0, 0, mp.angle);
+    dummy.updateMatrix();
+    matrices.push(...dummy.matrix.elements);
+  }
+  instancedGeom.setAttribute('instanceMatrix', new THREE.InstancedBufferAttribute(new Float32Array(matrices), 16));
+  instancedGeom.instanceCount = midpoints.length;
+
+  magnetStripGeomCache.set(cacheKey, instancedGeom);
+  return instancedGeom;
 }
 
 export interface MagnetPieceMeshProps {
@@ -274,8 +391,15 @@ export interface MagnetPieceMeshProps {
 }
 
 /**
- * 单块磁力片渲染:边框 + 中心 + 边线,带新增动画与选中高亮。
+ * 单块磁力片渲染:边框 + 中心 + 边线 + 磁铁条,带新增动画与选中高亮。
  * 用户端与编辑器共用此组件。
+ *
+ * P2 修复:
+ * - 透明中心板 depthWrite:false + renderOrder=1,消除闪烁/拉丝
+ * - 高亮材质在透明时也 depthWrite:false
+ * - 中心板参与阴影投射/接收
+ * - 边线使用 LineSegments2(真实线宽)
+ * - 增加边缘磁铁条细节
  */
 export function MagnetPieceMesh({
   shape,
@@ -293,11 +417,38 @@ export function MagnetPieceMesh({
 }: MagnetPieceMeshProps) {
   const frameGeom = useMemo(() => createFrameGeometry(shape), [shape]);
   const centerGeom = useMemo(() => createCenterGeometry(shape), [shape]);
-  const edgesGeom = useMemo(() => new THREE.EdgesGeometry(frameGeom), [frameGeom]);
 
   const frameMat = useMemo(() => getFrameMaterial(color), [color]);
   const centerMat = useMemo(() => getCenterMaterial(color), [color]);
-  const edgeMat = useMemo(() => getEdgeMaterial(color), [color]);
+
+  // P2-4: 使用 LineSegments2 + LineMaterial 替换 LineBasicMaterial
+  const { size } = useThree();
+  const edgeLineGeom = useMemo(() => createEdgeLineGeometry(shape, frameGeom), [shape, frameGeom]);
+  const edgeLineMat = useMemo(() => {
+    return getEdgeLineMaterial(color, { width: size.width || 800, height: size.height || 600 });
+  }, [color, size.width, size.height]);
+
+  // P2-4: memoize LineSegments2 实例,避免每次渲染重建
+  const lineSegments2 = useMemo(() => {
+    const ls = new LineSegments2(edgeLineGeom, edgeLineMat);
+    ls.computeLineDistances();
+    return ls;
+  }, [edgeLineGeom, edgeLineMat]);
+
+  // P2-4: canvas 尺寸变化时更新 LineMaterial resolution
+  useEffect(() => {
+    edgeLineMat.resolution.set(size.width, size.height);
+  }, [edgeLineMat, size.width, size.height]);
+
+  // P2-5: 边缘磁铁条几何
+  const magnetStripGeom = useMemo(() => createMagnetStripGeometry(shape), [shape]);
+  const magnetStripMat = useMemo(() => {
+    return new THREE.MeshStandardMaterial({
+      color: new THREE.Color(0.4, 0.4, 0.45),
+      roughness: 0.6,
+      metalness: 0.7,
+    });
+  }, []);
 
   const groupRef = useRef<THREE.Group>(null);
   const animProgress = useRef(0);
@@ -336,8 +487,7 @@ export function MagnetPieceMesh({
     }
   });
 
-  // P1-9: highlightMat 复用单一实例,通过属性变更避免每次状态切换都 new 一个材质导致 GPU 内存泄漏。
-  // 切换 selected/highlighted/dimmed 只需调整 emissiveIntensity/opacity,无需重建材质。
+  // P2-2: highlightMat 复用单一实例,透明时 depthWrite:false
   const highlightMat = useMemo(() => {
     const fill = parseRgbaString(magnetColorMap[color]);
     return new THREE.MeshStandardMaterial({
@@ -346,31 +496,38 @@ export function MagnetPieceMesh({
       emissiveIntensity: 0,
       roughness: 0.2,
       metalness: 0.1,
-      side: THREE.FrontSide,
+      side: THREE.DoubleSide,
       depthWrite: true,
       transparent: false,
       opacity: 1,
+      // P2-3: polygonOffset 与中心板一致
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
     });
-    // 仅在 color 变化时重建材质(color 影响 color 属性);其他状态切换通过下面的 useEffect 调整属性
   }, [color]);
 
-  // 切换状态时只调整属性,不重建材质
+  // P2-2: 切换状态时调整属性,透明时关闭 depthWrite
   useEffect(() => {
     const isAnim = isAnimatingRef.current;
     highlightMat.emissiveIntensity = selected ? 0.6 : highlighted ? 0.4 : isNew && !isAnim ? 0.5 : 0;
-    highlightMat.transparent = dimmed || opacity < 1;
+    const isTransparent = dimmed || opacity < 1;
+    highlightMat.transparent = isTransparent;
+    highlightMat.depthWrite = !isTransparent; // P2-2: 透明时关闭 depthWrite
     highlightMat.opacity = dimmed ? 0.35 : opacity;
     highlightMat.needsUpdate = true;
   }, [highlightMat, selected, highlighted, dimmed, opacity, isNew]);
 
-  // 组件卸载时释放材质,防止 GPU 资源累积
   useEffect(() => {
     return () => {
       highlightMat.dispose();
+      magnetStripMat.dispose();
+      lineSegments2.geometry.dispose();
     };
-  }, [highlightMat]);
+  }, [highlightMat, magnetStripMat, lineSegments2]);
 
   const useHighlight = selected || highlighted || (isNew && !isAnimatingRef.current && debugFlags.showHighlight);
+  const isCenterTransparent = centerMat.transparent;
 
   return (
     <group
@@ -381,19 +538,38 @@ export function MagnetPieceMesh({
       onPointerOut={onPointerOut}
     >
       {debugFlags.showFrame && (
-        <mesh geometry={frameGeom} castShadow={debugFlags.showShadows} receiveShadow={debugFlags.showShadows}>
+        <mesh
+          geometry={frameGeom}
+          castShadow={debugFlags.showShadows}
+          receiveShadow={debugFlags.showShadows}
+          renderOrder={0}
+        >
           <primitive object={frameMat} attach="material" />
         </mesh>
       )}
       {debugFlags.showCenter && (
-        <mesh geometry={centerGeom}>
+        <mesh
+          geometry={centerGeom}
+          // P2: 中心板也参与阴影
+          castShadow={debugFlags.showShadows}
+          receiveShadow={debugFlags.showShadows}
+          // P2-2: 透明物体 renderOrder=1,在不透明物体之后渲染
+          renderOrder={isCenterTransparent ? 1 : 0}
+        >
           <primitive object={useHighlight ? highlightMat : centerMat} attach="material" />
         </mesh>
       )}
       {debugFlags.showEdges && (
-        <lineSegments geometry={edgesGeom}>
-          <primitive object={edgeMat} attach="material" />
-        </lineSegments>
+        <primitive
+          object={lineSegments2}
+          renderOrder={2}
+        />
+      )}
+      {/* P2-5: 边缘磁铁条 */}
+      {debugFlags.showFrame && magnetStripGeom && (
+        <mesh geometry={magnetStripGeom} castShadow={debugFlags.showShadows}>
+          <primitive object={magnetStripMat} attach="material" />
+        </mesh>
       )}
     </group>
   );
@@ -405,10 +581,14 @@ export function disposeMagnet3DCaches() {
   for (const g of centerGeomCache.values()) g.dispose();
   for (const m of frameMatCache.values()) m.dispose();
   for (const m of centerMatCache.values()) m.dispose();
-  for (const m of edgeMatCache.values()) m.dispose();
+  for (const g of edgeLineGeomCache.values()) g.dispose();
+  for (const m of edgeLineMatCache.values()) m.dispose();
+  for (const g of magnetStripGeomCache.values()) g.dispose();
   frameGeomCache.clear();
   centerGeomCache.clear();
   frameMatCache.clear();
   centerMatCache.clear();
-  edgeMatCache.clear();
+  edgeLineGeomCache.clear();
+  edgeLineMatCache.clear();
+  magnetStripGeomCache.clear();
 }

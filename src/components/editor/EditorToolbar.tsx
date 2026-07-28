@@ -25,6 +25,12 @@ interface Props {
   autoSaved: boolean;
   toolMode: ToolMode;
   onToolModeChange: (mode: ToolMode) => void;
+  /** P2: 生成真实 3D 渲染封面 */
+  onGenerateCover: () => void;
+  /** P2: 是否正在生成封面(禁用按钮) */
+  generatingCover?: boolean;
+  /** P2: 是否已有封面 */
+  hasCover?: boolean;
 }
 
 const TOOL_MODES: { mode: ToolMode; label: string; title: string }[] = [
@@ -39,6 +45,7 @@ export function EditorToolbar({
   canUndo, canRedo, validationValid, existingModels,
   onNew, onUndo, onRedo, onImportExisting, onImportFile, onExport, onValidate, onPreview,
   onFitAll, onShowDrafts, onSaveAs, autoSaved, toolMode, onToolModeChange,
+  onGenerateCover, generatingCover, hasCover,
 }: Props) {
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -119,6 +126,15 @@ export function EditorToolbar({
       />
 
       <ToolButton onClick={onExport} title="导出为 JSON">导出</ToolButton>
+
+      {/* P2: 生成真实 3D 渲染封面 */}
+      <ToolButton
+        onClick={onGenerateCover}
+        disabled={generatingCover}
+        title={hasCover ? '重新生成 3D 渲染封面(替换现有封面)' : '生成 3D 渲染封面(用于方案库/首页展示)'}
+      >
+        {generatingCover ? '生成中…' : hasCover ? '重生成封面' : '生成封面'}
+      </ToolButton>
 
       <div className="w-px h-5 bg-gray-300 mx-1" />
 

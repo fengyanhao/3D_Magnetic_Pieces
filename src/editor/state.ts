@@ -3,7 +3,10 @@ import { SCHEMA_VERSION } from './types';
 import { defaultMetadata } from './types';
 import { uid, uniqueId } from './id';
 import { PartDef, MagnetColor, MagnetShape } from '../data/types';
-import { PieceRef, Connection, BuildStepV2 } from '../engine/types';
+import {
+  PieceRef, Connection, BuildStepV2,
+  StepCamera, PieceEntranceConfig, EasingName, EntranceType,
+} from '../engine/types';
 import { resnapshotTransforms } from './serialization';
 
 /**
@@ -327,7 +330,10 @@ export function moveStepAction(h: EditorHistory, fromIndex: number, toIndex: num
 export function updateStepAction(
   h: EditorHistory,
   stepId: number,
-  patch: Partial<Pick<BuildStepV2, 'title' | 'description' | 'parentGuide' | 'addedPieceIds'>>,
+  patch: Partial<Pick<BuildStepV2,
+    'title' | 'description' | 'parentGuide' | 'addedPieceIds'
+    | 'hint' | 'focusPoints' | 'highlightMs' | 'snapFeedback' | 'annotations'
+  >>,
 ): EditorHistory {
   return commit(h, (p) => {
     const step = p.steps.find((s) => s.id === stepId);
@@ -336,6 +342,11 @@ export function updateStepAction(
     if (patch.description !== undefined) step.description = patch.description;
     if (patch.parentGuide !== undefined) step.parentGuide = patch.parentGuide;
     if (patch.addedPieceIds !== undefined) step.addedPieceIds = [...patch.addedPieceIds];
+    if (patch.hint !== undefined) step.hint = patch.hint;
+    if (patch.focusPoints !== undefined) step.focusPoints = [...patch.focusPoints];
+    if (patch.highlightMs !== undefined) step.highlightMs = patch.highlightMs;
+    if (patch.snapFeedback !== undefined) step.snapFeedback = patch.snapFeedback;
+    if (patch.annotations !== undefined) step.annotations = { ...patch.annotations };
     return p;
   });
 }
@@ -350,6 +361,36 @@ export function addPieceToStepAction(h: EditorHistory, stepId: number, pieceId: 
   });
 }
 
+/** 把多片零件批量加入指定步骤(去重)。P1: 教学编排支持多选统一加入。 */
+export function addPiecesToStepAction(h: EditorHistory, stepId: number, pieceIds: string[]): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    for (const pid of pieceIds) {
+      if (!step.addedPieceIds.includes(pid)) step.addedPieceIds.push(pid);
+    }
+    return p;
+  });
+}
+
+/** 把零件从指定步骤移除(同时清理其 entrance 配置)。P1: 教学编排支持移出步骤。 */
+export function removePieceFromStepAction(h: EditorHistory, stepId: number, pieceId: string): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    step.addedPieceIds = step.addedPieceIds.filter((id) => id !== pieceId);
+    if (step.entrance && step.entrance[pieceId]) {
+      delete step.entrance[pieceId];
+      if (Object.keys(step.entrance).length === 0) delete step.entrance;
+    }
+    if (step.annotations && step.annotations[pieceId]) {
+      delete step.annotations[pieceId];
+      if (Object.keys(step.annotations).length === 0) delete step.annotations;
+    }
+    return p;
+  });
+}
+
 /** 把连接加入指定步骤。 */
 export function addConnectionToStepAction(
   h: EditorHistory,
@@ -360,6 +401,165 @@ export function addConnectionToStepAction(
     const step = p.steps.find((s) => s.id === stepId);
     if (!step) return p;
     step.addedConnections.push(connection);
+    return p;
+  });
+}
+
+/* ----------------- P1: 教学编排字段操作 ----------------- */
+
+/** 设置步骤镜头(作者保存的本步视角)。传 null 清除镜头。 */
+export function setStepCameraAction(
+  h: EditorHistory,
+  stepId: number,
+  camera: StepCamera | null,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (camera === null) {
+      delete step.camera;
+    } else {
+      step.camera = { ...camera };
+    }
+    return p;
+  });
+}
+
+/** 把当前编辑器视图(相机位置/target/zoom)保存为本步镜头。 */
+export function captureCurrentViewAsStepCameraAction(
+  h: EditorHistory,
+  stepId: number,
+  view: { position: [number, number, number]; target: [number, number, number]; zoom: number },
+  transitionMs: number = 800,
+): EditorHistory {
+  return setStepCameraAction(h, stepId, {
+    position: [...view.position],
+    target: [...view.target],
+    zoom: view.zoom,
+    transitionMs,
+  });
+}
+
+/** 设置步骤内某片零件的入场动画配置。传 null 清除该零件的 entrance(回退到默认)。 */
+export function setPieceEntranceAction(
+  h: EditorHistory,
+  stepId: number,
+  pieceId: string,
+  config: PieceEntranceConfig | null,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (config === null) {
+      if (step.entrance) {
+        delete step.entrance[pieceId];
+        if (Object.keys(step.entrance).length === 0) delete step.entrance;
+      }
+    } else {
+      if (!step.entrance) step.entrance = {};
+      step.entrance[pieceId] = { ...config };
+    }
+    return p;
+  });
+}
+
+/** 批量设置步骤内多片零件的入场类型(快速给同批零件统一设置 drop/side/fade 等)。 */
+export function batchSetEntranceTypeAction(
+  h: EditorHistory,
+  stepId: number,
+  pieceIds: string[],
+  type: EntranceType,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (!step.entrance) step.entrance = {};
+    pieceIds.forEach((pid, idx) => {
+      const existing = step.entrance![pid];
+      step.entrance![pid] = {
+        type,
+        delayMs: idx * 150,
+        durationMs: existing?.durationMs ?? 800,
+        easing: existing?.easing ?? 'easeOutCubic',
+        startOffset: existing?.startOffset,
+        startRotation: existing?.startRotation,
+      };
+    });
+    return p;
+  });
+}
+
+/** 设置步骤内某片零件的入场参数(局部更新,保留其他字段)。 */
+export function patchPieceEntranceAction(
+  h: EditorHistory,
+  stepId: number,
+  pieceId: string,
+  patch: Partial<Pick<PieceEntranceConfig, 'type' | 'delayMs' | 'durationMs' | 'easing' | 'startOffset' | 'startRotation'>>,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (!step.entrance) step.entrance = {};
+    const existing = step.entrance[pieceId] ?? {
+      type: 'drop' as EntranceType,
+      delayMs: 0,
+      durationMs: 800,
+      easing: 'easeOutCubic' as EasingName,
+    };
+    step.entrance[pieceId] = {
+      type: patch.type ?? existing.type,
+      delayMs: patch.delayMs ?? existing.delayMs,
+      durationMs: patch.durationMs ?? existing.durationMs,
+      easing: patch.easing ?? existing.easing,
+      startOffset: patch.startOffset ?? existing.startOffset,
+      startRotation: patch.startRotation ?? existing.startRotation,
+    };
+    return p;
+  });
+}
+
+/** 设置步骤的提示文字。 */
+export function setStepHintAction(h: EditorHistory, stepId: number, hint: string): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (hint.trim() === '') delete step.hint;
+    else step.hint = hint;
+    return p;
+  });
+}
+
+/** 设置步骤的观察重点列表。 */
+export function setStepFocusPointsAction(h: EditorHistory, stepId: number, points: string[]): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    const filtered = points.map((s) => s.trim()).filter((s) => s.length > 0);
+    if (filtered.length === 0) delete step.focusPoints;
+    else step.focusPoints = filtered;
+    return p;
+  });
+}
+
+/** 设置步骤内某片零件的标注文字。传空串清除。 */
+export function setPieceAnnotationAction(
+  h: EditorHistory,
+  stepId: number,
+  pieceId: string,
+  text: string,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    if (text.trim() === '') {
+      if (step.annotations) {
+        delete step.annotations[pieceId];
+        if (Object.keys(step.annotations).length === 0) delete step.annotations;
+      }
+    } else {
+      if (!step.annotations) step.annotations = {};
+      step.annotations[pieceId] = text;
+    }
     return p;
   });
 }
@@ -387,6 +587,27 @@ export function updateMetadataAction(
 ): EditorHistory {
   return commit(h, (p) => {
     p.metadata = { ...p.metadata, ...patch };
+    return p;
+  });
+}
+
+/* ----------------- P2: 缩略图/封面 ----------------- */
+
+/**
+ * P2: 设置封面 dataURL(由 coverRenderer 生成)。
+ * source 设为 'manual',dataUrl 内嵌到方案数据中。
+ */
+export function setThumbnailDataUrlAction(
+  h: EditorHistory,
+  dataUrl: string,
+  cameraPresetId?: string,
+): EditorHistory {
+  return commit(h, (p) => {
+    p.thumbnail = {
+      source: 'manual',
+      dataUrl,
+      ...(cameraPresetId ? { cameraPresetId } : {}),
+    };
     return p;
   });
 }

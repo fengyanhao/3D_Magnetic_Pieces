@@ -35,8 +35,8 @@ function getShapeForPiece(pieceId: string, model: PhysicalModel) {
 }
 
 describe('models', () => {
-  it('所有六个模型数据校验通过', () => {
-    expect(models.length).toBe(6);
+  it('所有七个模型数据校验通过（六基础 + 一旗舰）', () => {
+    expect(models.length).toBe(7);
 
     for (const modelData of models) {
       const model = convertToPhysicalModel(modelData);

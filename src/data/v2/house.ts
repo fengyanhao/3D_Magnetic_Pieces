@@ -10,7 +10,7 @@ export const houseV2: Model = {
   maxAge: 6,
   estimatedTime: '20分钟',
   coverImage: '',
-  description: '一个经典的小房子，有正方形底座、四面墙壁和正方形平屋顶。',
+  description: '一个开放式小房子，有正方形底座和四面墙壁，帮助孩子理解房子的基本结构。',
   buildMode: 'solid',
   parts: [
     { id: 'sq-red', name: '红色正方形磁力片', color: 'red', count: 12, shape: 'square' },

@@ -88,7 +88,7 @@ test.describe('磁力片方案编辑器', () => {
     await expect(page.getByText('磁力片方案编辑器')).toBeVisible({ timeout: 10000 });
     await page.waitForTimeout(500);
 
-    await page.getByRole('button', { name: /\+ 新增步骤/ }).click();
+    await page.getByRole('button', { name: /新增步骤/ }).click();
     // 时间轴显示步骤 1
     await expect(page.getByText(/#1/).first()).toBeVisible({ timeout: 5000 });
   });
@@ -117,7 +117,7 @@ test.describe('磁力片方案编辑器', () => {
     await page.waitForTimeout(500);
 
     await page.locator('button[title*="正方形"]').click();
-    await page.getByRole('button', { name: /\+ 新增步骤/ }).click();
+    await page.getByRole('button', { name: /新增步骤/ }).click();
 
     // 导出可能触发 confirm(未通过校验草稿导出),需提前监听
     page.on('dialog', (d) => d.accept());
@@ -152,7 +152,7 @@ test.describe('磁力片方案编辑器', () => {
     await expect(page.getByText(/已导入现有模型/)).toBeVisible({ timeout: 5000 });
 
     // 进入预览
-    await page.getByRole('button', { name: '预览' }).click();
+    await page.getByRole('button', { name: /全屏预览/ }).click();
     await expect(page.getByText(/用户端预览/)).toBeVisible({ timeout: 5000 });
     // 步骤按钮可见
     await expect(page.getByRole('button', { name: '下一步' })).toBeVisible();

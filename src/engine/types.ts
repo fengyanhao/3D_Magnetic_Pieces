@@ -113,7 +113,67 @@ export interface BuildStepV2 {
   addedPieceIds: string[];
   /** 本步骤新增的连接关系 */
   addedConnections: Connection[];
+  /* ----------------- P1: 教学编排字段（全部可选，旧数据自动获得默认值） ----------------- */
+  /** 本步镜头（若未设置，播放器保持上一镜头或使用默认镜头） */
+  camera?: StepCamera;
+  /** 每片零件的入场配置（按 pieceId 索引） */
+  entrance?: Record<string, PieceEntranceConfig>;
+  /** 新零件的短暂高亮时间（毫秒，0 = 不高亮），默认 600ms */
+  highlightMs?: number;
+  /** 吸附完成时的反馈类型 */
+  snapFeedback?: 'none' | 'pulse' | 'glow';
+  /** 可选的零件标注（按 pieceId 索引，文本内容） */
+  annotations?: Record<string, string>;
+  /** 本步提示文字（显示在播放器侧栏） */
+  hint?: string;
+  /** 本步观察重点（显示在播放器侧栏） */
+  focusPoints?: string[];
 }
+
+/** 步骤镜头：作者保存的本步视角 */
+export interface StepCamera {
+  /** 镜头位置 */
+  position: [number, number, number];
+  /** 镜头看向的目标点 */
+  target: [number, number, number];
+  /** 缩放（OrthographicCamera zoom，或透视相机的 dolly 距离参考） */
+  zoom: number;
+  /** 镜头过渡时长（毫秒，0 = 瞬切） */
+  transitionMs: number;
+}
+
+/** 入场类型 */
+export type EntranceType =
+  | 'drop'      // 上方飞入
+  | 'side'      // 侧面飞入
+  | 'fold'      // 折叠
+  | 'fade'      // 原位淡入
+  | 'none';     // 无动画（直接显示）
+
+/** 单片零件的入场动画配置 */
+export interface PieceEntranceConfig {
+  /** 入场类型，默认 'drop' */
+  type: EntranceType;
+  /** 相对步骤开始的延迟（毫秒），默认 0 */
+  delayMs: number;
+  /** 动画时长（毫秒），默认 800 */
+  durationMs: number;
+  /** 缓动函数名称，默认 'easeOutCubic' */
+  easing: EasingName;
+  /** 起始位移偏移（局部坐标，相对最终位置） */
+  startOffset?: [number, number, number];
+  /** 起始旋转偏移（欧拉角弧度，相对最终旋转） */
+  startRotation?: [number, number, number];
+}
+
+/** 支持的缓动函数名称 */
+export type EasingName =
+  | 'linear'
+  | 'easeOutCubic'
+  | 'easeInOutCubic'
+  | 'easeOutBack'
+  | 'easeOutBounce'
+  | 'easeOutElastic';
 
 /** 物理模型（替代旧 Model 中的空间数据） */
 export interface PhysicalModel {
@@ -178,6 +238,9 @@ export interface ValidationResult {
 /**
  * P1-13: 校验问题的标准错误码,与 ValidationIssue.code 字段对应。
  * editor 层基于 code 分类,不依赖中文文案匹配,改文案不会破坏分类。
+ *
+ * P0-4: 新增 SEMANTIC_* 系列错误码,用于语义校验
+ * (零件覆盖完整性、最终步完整性、零件数一致性、结构宣称一致性)。
  */
 export const ValidationIssueCode = {
   UNCONNECTED: 'unconnected',
@@ -195,6 +258,11 @@ export const ValidationIssueCode = {
   PLANARITY: 'planarity',
   STEP: 'step',
   DIHEDRAL_INVALID: 'dihedral-invalid',
+  // P0-4: 语义校验
+  SEMANTIC_PIECE_NOT_COVERED: 'semantic-piece-not-covered',
+  SEMANTIC_FINAL_STEP_INCOMPLETE: 'semantic-final-step-incomplete',
+  SEMANTIC_PARTS_COUNT_MISMATCH: 'semantic-parts-count-mismatch',
+  SEMANTIC_STRUCTURE_CLAIM: 'semantic-structure-claim',
 } as const;
 
 export type ValidationIssueCode = typeof ValidationIssueCode[keyof typeof ValidationIssueCode];

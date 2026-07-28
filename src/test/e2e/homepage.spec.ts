@@ -5,10 +5,10 @@ test('首页正常加载', async ({ page }) => {
   await expect(page).toHaveTitle(/亲子磁力片/);
 });
 
-test('模型列表页显示六个模型卡片', async ({ page }) => {
+test('模型列表页显示七个模型卡片（六基础 + 一旗舰）', async ({ page }) => {
   await page.goto('/list');
   const cards = page.locator('[data-testid="model-card"]');
-  await expect(cards).toHaveCount(6);
+  await expect(cards).toHaveCount(7);
 });
 
 test('点击模型卡片进入详情页', async ({ page }) => {

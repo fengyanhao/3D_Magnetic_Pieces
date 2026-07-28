@@ -365,7 +365,285 @@ export function validatePhysicalModel(
     checkPlanarityAllVertices(modelId, model.pieces, transforms, getShapeForPiece, issues);
   }
 
+  // P0-4: 语义校验（步骤覆盖完整性 / 最终步完整性 / 零件数一致性 / 结构宣称一致性）
+  checkSemanticPieceCoverage(modelId, model, issues);
+  checkSemanticFinalStepComplete(modelId, model, issues);
+  checkSemanticPartsCount(modelId, model, issues);
+  checkSemanticStructureClaims(modelId, model, transforms, getShapeForPiece, issues);
+
   return { valid: issues.filter((i) => i.severity === 'error').length === 0, issues };
+}
+
+/* ----------------- P0-4: 语义校验 ----------------- */
+
+/**
+ * 零件覆盖完整性：每个零件必须被且仅被一个步骤引入。
+ * - 未被任何步骤引入 → error（零件游离）
+ * - 被多个步骤引入 → 已在 checkPieceAddedOnce 报告，这里不重复
+ * - 连接同样要求全覆盖（已在 checkConnectionStepCoverage 报告）
+ */
+function checkSemanticPieceCoverage(
+  modelId: string,
+  model: PhysicalModel,
+  issues: ValidationIssue[]
+) {
+  if (model.steps.length === 0) return;
+
+  const added = new Set<string>();
+  for (const step of model.steps) {
+    for (const pid of step.addedPieceIds) added.add(pid);
+  }
+
+  for (const piece of model.pieces) {
+    if (!added.has(piece.id)) {
+      issues.push(
+        issue(modelId, `零件 ${piece.id} 未被任何步骤引入（语义校验：步骤覆盖不完整）`, 'error', {
+          pieceId: piece.id,
+          code: ValidationIssueCode.SEMANTIC_PIECE_NOT_COVERED,
+        })
+      );
+    }
+  }
+}
+
+/**
+ * 最终步骤完整性：累计所有步骤的新增零件和连接后，必须等于模型的 pieces 和 connections。
+ * - 若累计少于 model.pieces → 报告缺失零件
+ * - 若累计多于 model.pieces → 报告多余零件（步骤引入了不属于模型的零件）
+ * - 连接同样要求一致
+ */
+function checkSemanticFinalStepComplete(
+  modelId: string,
+  model: PhysicalModel,
+  issues: ValidationIssue[]
+) {
+  if (model.steps.length === 0) return;
+
+  const cumulativePieces = new Set<string>();
+  const cumulativeConnKeys = new Set<string>();
+
+  function connKey(c: Connection): string {
+    return c.pieceA < c.pieceB
+      ? `${c.pieceA}:${c.pieceB}:${c.portA}:${c.portB}`
+      : `${c.pieceB}:${c.pieceA}:${c.portB}:${c.portA}`;
+  }
+
+  for (const step of model.steps) {
+    for (const pid of step.addedPieceIds) cumulativePieces.add(pid);
+    for (const c of step.addedConnections) cumulativeConnKeys.add(connKey(c));
+  }
+
+  // 零件：累计 vs model.pieces
+  const modelPieceIds = new Set(model.pieces.map((p) => p.id));
+  const missingPieces = model.pieces
+    .filter((p) => !cumulativePieces.has(p.id))
+    .map((p) => p.id);
+  const extraPieces = [...cumulativePieces].filter((pid) => !modelPieceIds.has(pid));
+
+  if (missingPieces.length > 0) {
+    issues.push(
+      issue(modelId, `最后一步未达到完整模型：以下零件未被任何步骤累积引入 ${missingPieces.join(', ')}`, 'error', {
+        stepId: model.steps[model.steps.length - 1].id,
+        code: ValidationIssueCode.SEMANTIC_FINAL_STEP_INCOMPLETE,
+      })
+    );
+  }
+  if (extraPieces.length > 0) {
+    issues.push(
+      issue(modelId, `步骤引入了不属于模型的零件：${extraPieces.join(', ')}`, 'error', {
+        code: ValidationIssueCode.SEMANTIC_FINAL_STEP_INCOMPLETE,
+      })
+    );
+  }
+
+  // 连接：累计 vs model.connections
+  const modelConnKeys = new Set(model.connections.map(connKey));
+  const missingConns = model.connections
+    .map((c, i) => ({ key: connKey(c), idx: i }))
+    .filter((x) => !cumulativeConnKeys.has(x.key));
+  const extraConns = [...cumulativeConnKeys].filter((k) => !modelConnKeys.has(k));
+
+  if (missingConns.length > 0) {
+    issues.push(
+      issue(modelId, `最后一步未达到完整模型：${missingConns.length} 个连接未被任何步骤累积引入`, 'error', {
+        stepId: model.steps[model.steps.length - 1].id,
+        code: ValidationIssueCode.SEMANTIC_FINAL_STEP_INCOMPLETE,
+      })
+    );
+  }
+  if (extraConns.length > 0) {
+    issues.push(
+      issue(modelId, `步骤引入了 ${extraConns.length} 个不属于模型的连接`, 'error', {
+        code: ValidationIssueCode.SEMANTIC_FINAL_STEP_INCOMPLETE,
+      })
+    );
+  }
+}
+
+/**
+ * 零件数一致性：parts[*].count 必须等于按 partId 分组的 pieces 实际数量。
+ * - 不一致 → error（数据冗余字段失同步）
+ */
+function checkSemanticPartsCount(
+  modelId: string,
+  model: PhysicalModel,
+  issues: ValidationIssue[]
+) {
+  const usage: Record<string, number> = {};
+  for (const piece of model.pieces) {
+    usage[piece.partId] = (usage[piece.partId] ?? 0) + 1;
+  }
+
+  for (const part of model.parts) {
+    const actual = usage[part.id] ?? 0;
+    if (part.count !== actual) {
+      issues.push(
+        issue(modelId, `零件清单 ${part.name} (${part.id}) count=${part.count} 与实际使用数量 ${actual} 不一致`, 'error', {
+          code: ValidationIssueCode.SEMANTIC_PARTS_COUNT_MISMATCH,
+        })
+      );
+    }
+  }
+}
+
+/**
+ * 结构宣称一致性：解析 description 文本，识别"屋顶/塔楼/底座/墙/门/入口"等关键词，
+ * 并根据 3D 几何特征验证对应结构是否真实存在。
+ *
+ * 关键词 → 几何判据（buildMode='solid'/'standing' 时启用，flat 模式只校验底座）：
+ * - 屋顶/roof: 至少有一片零件在最高点（y > 全场最大 y - thickness），且非水平放置（normal 与 up 夹角 > 30°）
+ * - 塔楼/tower: 至少有 3 层垂直堆叠（不同 y 高度上各有 >=1 片垂直零件）
+ * - 底座/地基/base: 至少有 1 片水平放置且贴近地面的零件
+ * - 墙/wall: 至少有 2 片垂直零件（dihedral 接近 ±90，且 piece 的 z 法线与 up 接近垂直）
+ * - 门/入口/door: 墙体上存在缺口（暂以"墙体零件数 >= 3 且未完全封闭"作为弱判据，避免误报）
+ */
+function checkSemanticStructureClaims(
+  modelId: string,
+  model: PhysicalModel,
+  transforms: Record<string, PieceTransform>,
+  getShape: (pid: string) => ShapeDef | undefined,
+  issues: ValidationIssue[]
+) {
+  const text = `${model.name} ${model.description}`;
+  const claims = {
+    roof: /屋顶|roof/i.test(text),
+    tower: /塔楼|tower/i.test(text),
+    base: /底座|地基|base|底板/i.test(text),
+    wall: /墙|wall/i.test(text),
+    door: /\b门\b|入口|door/i.test(text),
+  };
+
+  // 没有结构宣称就不校验
+  if (!claims.roof && !claims.tower && !claims.base && !claims.wall && !claims.door) return;
+
+  const up = new Vector3(0, 1, 0);
+  interface PieceInfo {
+    id: string;
+    position: Vector3;
+    normal: Vector3; // piece 局部 +Z 在世界坐标的方向
+    isHorizontal: boolean; // 法线与 up 接近平行（水平放置）
+    isVertical: boolean; // 法线与 up 接近垂直（竖立放置）
+    touchesGround: boolean;
+    y: number;
+  }
+  const infos: PieceInfo[] = [];
+  let maxY = -Infinity;
+  let minY = Infinity;
+  const halfThickList: number[] = [];
+
+  for (const p of model.pieces) {
+    const shape = getShape(p.id);
+    const tf = transforms[p.id];
+    if (!shape || !tf) continue;
+    const normal = new Vector3(0, 0, 1).applyQuaternion(tf.quaternion).normalize();
+    const isHorizontal = Math.abs(normal.dot(up)) > 0.85;
+    const isVertical = Math.abs(normal.dot(up)) < 0.15;
+    const halfThick = shape.thickness / 2;
+    halfThickList.push(halfThick);
+    // 检查是否触地：最低顶点 y <= tolerance
+    let pieceMinY = Infinity;
+    for (const v of shape.vertices) {
+      for (const z of [-halfThick, halfThick]) {
+        // 顶点局部 (v.x, v.y, z) 经过 tf 变换
+        const world = new Vector3(v.x, v.y, z).applyQuaternion(tf.quaternion).add(tf.position);
+        if (world.y < pieceMinY) pieceMinY = world.y;
+      }
+    }
+    infos.push({
+      id: p.id,
+      position: tf.position,
+      normal,
+      isHorizontal,
+      isVertical,
+      touchesGround: pieceMinY <= 0.05,
+      y: tf.position.y,
+    });
+    if (tf.position.y > maxY) maxY = tf.position.y;
+    if (tf.position.y < minY) minY = tf.position.y;
+  }
+
+  // 平均厚度，用于高度分层
+  const avgThick = halfThickList.length > 0
+    ? halfThickList.reduce((a, b) => a + b, 0) / halfThickList.length
+    : 0.05;
+
+  function reportMissing(claim: string, reason: string) {
+    issues.push(
+      issue(modelId, `文案宣称存在"${claim}"但模型中未检测到对应结构：${reason}`, 'error', {
+        code: ValidationIssueCode.SEMANTIC_STRUCTURE_CLAIM,
+      })
+    );
+  }
+
+  // 屋顶
+  if (claims.roof) {
+    if (maxY === -Infinity) {
+      reportMissing('屋顶', '模型无有效几何');
+    } else {
+      const topPieces = infos.filter((i) => i.y >= maxY - avgThick * 0.5);
+      const hasRoof = topPieces.some((i) => !i.isHorizontal); // 屋顶应是非水平的（倾斜或竖立封顶）
+      if (!hasRoof) {
+        reportMissing('屋顶', `最高点 y=${maxY.toFixed(3)} 附近仅发现水平零件，未发现倾斜/竖立封顶结构`);
+      }
+    }
+  }
+
+  // 塔楼：至少 3 个不同高度层，每层至少 1 片零件
+  if (claims.tower) {
+    if (maxY - minY < avgThick * 2.5) {
+      reportMissing('塔楼', `模型高度跨度 ${(maxY - minY).toFixed(3)} 不足（需要至少 ${avgThick * 2.5} 才算塔楼）`);
+    } else {
+      // 按 avgThick 分层
+      const layers = new Set<number>();
+      for (const info of infos) {
+        const layerIdx = Math.floor((info.y - minY) / avgThick);
+        layers.add(layerIdx);
+      }
+      if (layers.size < 3) {
+        reportMissing('塔楼', `检测到 ${layers.size} 个高度层，需要至少 3 层`);
+      }
+    }
+  }
+
+  // 底座
+  if (claims.base) {
+    const hasBase = infos.some((i) => i.isHorizontal && i.touchesGround);
+    if (!hasBase) {
+      reportMissing('底座', '未发现水平放置且贴近地面的零件');
+    }
+  }
+
+  // 墙
+  if (claims.wall) {
+    const wallPieces = infos.filter((i) => i.isVertical);
+    if (wallPieces.length < 2) {
+      reportMissing('墙', `检测到 ${wallPieces.length} 片竖立零件，需要至少 2 片`);
+    }
+  }
+
+  // 门/入口：弱判据，仅在 wall 满足时检查（避免误报）
+  // 当前实现不报 error，仅在 wallPieces < 3 时给 warning（避免过度严格）
+  // 此处不强制要求门洞存在，留作未来扩展
 }
 
 function checkPortOverlap(

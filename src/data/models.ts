@@ -5,6 +5,7 @@ import { catV2 } from './v2/cat';
 import { penguinV2 } from './v2/penguin';
 import { rocketV2 } from './v2/rocket';
 import { castleV2 } from './v2/castle';
+import { flagshipHouseV2 } from './v2/flagship-house';
 
 function svgCover(content: string): string {
   return 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">${content}</svg>`);
@@ -67,6 +68,16 @@ export const penguinCover = svgCover(`
   <circle cx="175" cy="180" r="10" fill="rgba(44,62,80,0.8)"/>
   <circle cx="225" cy="180" r="10" fill="rgba(44,62,80,0.8)"/>
   <polygon points="200,195 215,215 185,215" fill="rgba(255,230,109,0.9)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
+`);
+
+export const flagshipHouseCover = svgCover(`
+  <defs><linearGradient id="fhg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F0F8FF"/><stop offset="100%" stop-color="#FFF8E7"/></linearGradient></defs>
+  <rect width="400" height="400" fill="url(#fhg)"/>
+  <rect x="100" y="200" width="200" height="120" rx="6" fill="rgba(52,152,219,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
+  <rect x="100" y="140" width="200" height="60" rx="6" fill="rgba(255,230,109,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
+  <polygon points="80,140 200,50 320,140" fill="rgba(78,205,150,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
+  <rect x="100" y="260" width="200" height="60" rx="4" fill="rgba(255,107,107,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
+  <rect x="170" y="280" width="60" height="40" rx="4" fill="rgba(255,230,109,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
 `);
 
 export const themeLabels: Record<string, string> = {
@@ -140,4 +151,5 @@ export const models: Model[] = [
   { ...catV2, coverImage: catCover },
   { ...castleV2, coverImage: castleCover },
   { ...penguinV2, coverImage: penguinCover },
+  { ...flagshipHouseV2, coverImage: flagshipHouseCover },
 ];

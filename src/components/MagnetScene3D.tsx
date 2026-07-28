@@ -1,12 +1,13 @@
 import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
-import { OrbitControls, ContactShadows } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
 import { Model, MagnetColor } from '../data/types';
 import { solveConnections } from '../engine/solver';
 import { getShapeDef } from '../engine/shapes';
 import { PieceTransform } from '../engine/types';
 import { MagnetPieceMesh, debugFlags } from './magnet3d/primitives';
+import { SceneLighting, defaultGLProps } from './magnet3d/SceneLighting';
 
 interface MagnetScene3DProps {
   model: Model;
@@ -237,42 +238,26 @@ function SceneContent({
 
   return (
     <>
-      <ambientLight intensity={0.6} />
-      <directionalLight
-        position={[5, 10, 5]}
-        intensity={1.2}
-        castShadow
-        shadow-mapSize-width={1024}
-        shadow-mapSize-height={1024}
-      />
-      <directionalLight position={[-3, 5, -3]} intensity={0.4} />
-
-      {visibleIds.map((pid) => {
-        const piece = pieceMap[pid];
-        const tf = transforms[pid];
-        if (!piece || !tf) return null;
-        const part = partMap[piece.partId];
-        if (!part) return null;
-        const shape = getShapeDef(part.shape);
-        if (!shape) return null;
-        return (
-          <MagnetPieceMesh
-            key={pid}
-            shape={shape}
-            transform={tf}
-            color={part.color as MagnetColor}
-            isNew={newIds.has(pid)}
-          />
-        );
-      })}
-
-      <ContactShadows
-        position={[0, 0.01, 0]}
-        opacity={0.4}
-        scale={10}
-        blur={2}
-        far={4}
-      />
+      <SceneLighting shadowScale={10} shadowOpacity={0.4}>
+        {visibleIds.map((pid) => {
+          const piece = pieceMap[pid];
+          const tf = transforms[pid];
+          if (!piece || !tf) return null;
+          const part = partMap[piece.partId];
+          if (!part) return null;
+          const shape = getShapeDef(part.shape);
+          if (!shape) return null;
+          return (
+            <MagnetPieceMesh
+              key={pid}
+              shape={shape}
+              transform={tf}
+              color={part.color as MagnetColor}
+              isNew={newIds.has(pid)}
+            />
+          );
+        })}
+      </SceneLighting>
 
       <OrbitControls
         ref={controlsRef}
@@ -305,7 +290,7 @@ export function MagnetScene3D({ model, stepIndex, highlightNew = false, interact
         shadows="percentage"
         dpr={[1, 2]}
         style={{ width: '100%', height: '100%' }}
-        gl={{ antialias: true }}
+        gl={{ ...defaultGLProps }}
       >
         <SceneContent
           model={model}

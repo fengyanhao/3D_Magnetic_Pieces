@@ -38,6 +38,10 @@ export type ValidationCategory =
   | 'planarity' // flat 模型不共面
   | 'step' // 步骤增量错误
   | 'dihedral' // 二面角非法
+  | 'semantic-piece' // P0-4: 零件步骤覆盖缺失
+  | 'semantic-final' // P0-4: 最终步骤不完整
+  | 'semantic-parts-count' // P0-4: 零件清单数量不一致
+  | 'semantic-structure' // P0-4: 结构宣称与几何不符
   | 'other';
 
 function categorize(raw: ValidationIssue): ValidationCategory {
@@ -59,6 +63,11 @@ function categorize(raw: ValidationIssue): ValidationCategory {
     case 'planarity': return 'planarity';
     case 'step': return 'step';
     case 'dihedral-invalid': return 'dihedral';
+    // P0-4: 语义校验
+    case 'semantic-piece-not-covered': return 'semantic-piece';
+    case 'semantic-final-step-incomplete': return 'semantic-final';
+    case 'semantic-parts-count-mismatch': return 'semantic-parts-count';
+    case 'semantic-structure-claim': return 'semantic-structure';
     default:
       break;
   }
@@ -92,6 +101,10 @@ export const categoryLabels: Record<ValidationCategory, string> = {
   planarity: 'flat 模型不共面',
   step: '步骤增量错误',
   dihedral: '二面角非法',
+  'semantic-piece': '零件未被步骤覆盖',
+  'semantic-final': '最终步骤不完整',
+  'semantic-parts-count': '零件清单数量不一致',
+  'semantic-structure': '结构宣称与几何不符',
   other: '其他',
 };
 
@@ -178,6 +191,14 @@ export function suggestFix(issue: EditorValidationIssue): string {
       return '检查步骤引用的零件/连接是否在本步骤新增且可达。';
     case 'dihedral':
       return '二面角应在 [-180, 180] 范围内且为有限数。';
+    case 'semantic-piece':
+      return '把该零件加入某个步骤的 addedPieceIds，或删除该零件。';
+    case 'semantic-final':
+      return '检查步骤累积新增是否覆盖 model.pieces 和 model.connections，不要少也不要多。';
+    case 'semantic-parts-count':
+      return '调整 parts[*].count 与实际 pieces 数量一致，或在编辑器中通过零件操作触发自动同步。';
+    case 'semantic-structure':
+      return '修改文案描述与实际几何结构一致：要么补齐缺失的结构零件，要么删除文案中的虚假宣称。';
     default:
       return '检查相关连接参数。';
   }

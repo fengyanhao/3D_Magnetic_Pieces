@@ -38,3 +38,6 @@ screenshots/
 .env
 .env.local
 .env.*.local
+
+# 参考案例（只读，不提交）
+MagneticBlox案例/

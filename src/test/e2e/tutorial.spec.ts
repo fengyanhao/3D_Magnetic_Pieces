@@ -47,8 +47,8 @@ test('重置视角按钮存在', async ({ page }) => {
   }
 });
 
-test('六个模型教程页面都可访问', async ({ page }) => {
-  const modelIds = ['house-1', 'car-1', 'rocket-1', 'cat-1', 'castle-1', 'penguin-1'];
+test('七个模型教程页面都可访问（六基础 + 一旗舰）', async ({ page }) => {
+  const modelIds = ['house-1', 'car-1', 'rocket-1', 'cat-1', 'castle-1', 'penguin-1', 'flagship-house-1'];
 
   for (const id of modelIds) {
     await page.goto(`/tutorial/${id}`);

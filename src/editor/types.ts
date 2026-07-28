@@ -33,6 +33,8 @@ export interface CameraPreset {
 export interface ThumbnailInfo {
   source: 'auto' | 'manual';
   cameraPresetId?: string;
+  /** P2: 编辑器生成的真实 3D 渲染封面 dataURL(PNG)。与 SchemeDef.ThumbnailInfo.dataUrl 对齐。 */
+  dataUrl?: string;
 }
 
 export interface ValidationInfo {

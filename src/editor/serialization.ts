@@ -79,7 +79,8 @@ export function projectToModel(project: EditorProject): Model {
     minAge: m.minAge,
     maxAge: m.maxAge,
     estimatedTime: m.estimatedTime,
-    coverImage: '',
+    // P2: 优先用编辑器生成的真实 3D 渲染封面;无封面时为空(ModelCard 有 fallback)
+    coverImage: project.thumbnail?.dataUrl ?? '',
     description: m.description,
     buildMode: m.buildMode,
     parts: project.parts.map((p) => ({ ...p })),
@@ -94,6 +95,14 @@ export function projectToModel(project: EditorProject): Model {
       parentGuide: s.parentGuide,
       addedPieceIds: [...s.addedPieceIds],
       addedConnections: s.addedConnections.map((c) => ({ ...c })),
+      // P1: 教学编排字段透传到用户端 Model,使 TutorialPlayer 能读取
+      ...(s.camera ? { camera: { ...s.camera } } : {}),
+      ...(s.entrance ? { entrance: { ...s.entrance } } : {}),
+      ...(s.highlightMs !== undefined ? { highlightMs: s.highlightMs } : {}),
+      ...(s.snapFeedback ? { snapFeedback: s.snapFeedback } : {}),
+      ...(s.annotations ? { annotations: { ...s.annotations } } : {}),
+      ...(s.hint ? { hint: s.hint } : {}),
+      ...(s.focusPoints ? { focusPoints: [...s.focusPoints] } : {}),
     })),
   };
 }
@@ -191,7 +200,15 @@ export function modelToProject(model: Model): EditorProject {
 }
 
 /* ----------------- 序列化与解析 ----------------- */
+//
+// P0-3: 持久化真值已切换到 SchemeDef v3（engine/scheme.ts）。
+//   - 草稿保存 / 加载：走 draftStore.ts，内部调用 serializeProjectAsScheme / parseScheme
+//   - 文件导出 / 导入：应调用 serializeProjectAsScheme / parseScheme
+//   - 旧 serializeProject / parseProject 保留为运行时调试与测试用途，
+//     不再作为持久化入口。新代码不要调用它们做持久化。
+//
 
+/** @deprecated 持久化请改用 serializeProjectAsScheme（输出 SchemeDef v3）。 */
 export function serializeProject(project: EditorProject): string {
   const out: EditorProject = {
     ...project,
@@ -283,6 +300,9 @@ export function integrityCheck(project: EditorProject): IntegrityIssue[] {
 /**
  * 解析 JSON 字符串为 EditorProject。
  * 不合法数据不会抛异常;失败时返回 errors,由 UI 显示。
+ *
+ * @deprecated 持久化加载请改用 parseScheme + schemeToEditorProject（自动识别 v1/v3）。
+ *   此函数仅保留以兼容现有测试与运行时调试路径。
  */
 export function parseProject(input: string): ParseResult {
   const errors: string[] = [];

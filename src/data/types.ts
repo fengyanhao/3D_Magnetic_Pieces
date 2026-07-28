@@ -65,6 +65,32 @@ export interface PieceRef {
   isRoot?: boolean;
 }
 
+/** 步骤镜头：作者保存的本步视角（与 engine/types.ts StepCamera 一致） */
+export interface StepCamera {
+  position: [number, number, number];
+  target: [number, number, number];
+  zoom: number;
+  transitionMs: number;
+}
+
+/** 入场类型 */
+export type EntranceType =
+  | 'drop'
+  | 'side'
+  | 'fold'
+  | 'fade'
+  | 'none';
+
+/** 单片零件的入场动画配置 */
+export interface PieceEntranceConfig {
+  type: EntranceType;
+  delayMs: number;
+  durationMs: number;
+  easing: string;
+  startOffset?: [number, number, number];
+  startRotation?: [number, number, number];
+}
+
 export interface Step {
   id: number;
   title: string;
@@ -76,6 +102,21 @@ export interface Step {
   addedPieceIds?: string[];
   /** v2 新格式：本步骤新增的连接 */
   addedConnections?: ConnectionDef[];
+  /* ----------------- P1: 教学编排字段（全部可选，旧数据自动获得默认值） ----------------- */
+  /** 本步镜头 */
+  camera?: StepCamera;
+  /** 每片零件的入场配置（按 pieceId 索引） */
+  entrance?: Record<string, PieceEntranceConfig>;
+  /** 新零件的短暂高亮时间（毫秒，0 = 不高亮） */
+  highlightMs?: number;
+  /** 吸附完成时的反馈类型 */
+  snapFeedback?: 'none' | 'pulse' | 'glow';
+  /** 可选的零件标注（按 pieceId 索引） */
+  annotations?: Record<string, string>;
+  /** 本步提示文字 */
+  hint?: string;
+  /** 本步观察重点 */
+  focusPoints?: string[];
 }
 
 export interface Model {
