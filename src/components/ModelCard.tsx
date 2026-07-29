@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { Star, Clock, Users } from 'lucide-react';
 import { Model } from '../data/types';
 import { themeLabels, difficultyLabels, difficultyColors } from '../data/models';
+import { ModelCover } from './ModelCover';
 
 interface ModelCardProps {
   model: Model;
@@ -17,23 +18,8 @@ export function ModelCard({ model }: ModelCardProps) {
       className="bg-white rounded-2xl card-shadow overflow-hidden transform transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] text-left w-full"
     >
       <div className="relative aspect-square">
-        {model.coverImage ? (
-          <img
-            src={model.coverImage}
-            alt={model.name}
-            className="w-full h-full object-cover"
-          />
-        ) : (
-          // P2: 无封面时的占位图(纯 CSS,不依赖外部资源)
-          <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
-            <div className="text-center">
-              <div className="w-16 h-16 mx-auto mb-2 rounded-2xl bg-white/60 backdrop-blur-sm flex items-center justify-center">
-                <span className="text-2xl font-bold text-gray-400">{model.name.charAt(0)}</span>
-              </div>
-              <p className="text-xs text-gray-400">未生成封面</p>
-            </div>
-          </div>
-        )}
+        {/* P0-6: 使用真实3D渲染封面，替代手绘SVG */}
+        <ModelCover model={model} className="w-full h-full object-cover" />
         <div className="absolute top-2 left-2">
           <span className="bg-white/90 backdrop-blur-sm text-xs font-medium px-2 py-0.5 rounded-full text-gray-700">
             {themeLabels[model.theme]}

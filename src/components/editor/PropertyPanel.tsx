@@ -499,7 +499,16 @@ function StepProps(props: Props) {
 /* ----------------- 校验 Tab ----------------- */
 function ValidationTab(props: Props) {
   const { validation, onFocusError } = props;
-  if (!validation) return <p className="text-xs text-gray-400 p-4">校验中…</p>;
+  // P0-5: 初始状态为「尚未校验」，不显示「校验中…」误导用户
+  if (!validation) {
+    return (
+      <div className="p-4 text-center" data-testid="validation-idle">
+        <div className="text-gray-400 text-3xl mb-2" aria-hidden="true">○</div>
+        <p className="text-xs text-gray-600 mb-1">尚未校验</p>
+        <p className="text-[11px] text-gray-400">点击工具栏「校验」按钮开始检查</p>
+      </div>
+    );
+  }
   if (validation.solverError) {
     return <p className="text-xs text-red-600 p-4">{validation.solverError}</p>;
   }

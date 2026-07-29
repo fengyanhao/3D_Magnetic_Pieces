@@ -57,7 +57,13 @@ export function ModelDetailPage() {
     );
   }
 
-  const hasProgress = progress && progress.currentStep < model.steps.length - 1;
+  // P0-2: 三态进度判定
+  // - 无进度：progress 为空 → 显示「开始搭建」
+  // - 进行中：progress 存在且未完成(currentStep < steps.length) → 显示「继续第N步」+「重新开始」
+  // - 已完成：progress 存在且 currentStep >= steps.length → 显示「查看成品」+「再次搭建」
+  const isCompleted = !!(progress && progress.currentStep >= model.steps.length);
+  const isInProgress = !!(progress && progress.currentStep > 0 && progress.currentStep < model.steps.length);
+  const hasProgress = isInProgress;
 
   return (
     <div>
@@ -218,26 +224,50 @@ export function ModelDetailPage() {
             </div>
 
             <div className="pt-2 pb-4 md:pb-0">
-              {hasProgress ? (
+              {isCompleted ? (
+                <>
+                  <button
+                    onClick={() => navigate(`/tutorial/${model.id}?step=${model.steps.length}`)}
+                    className="btn-primary w-full flex items-center justify-center gap-2 mb-3"
+                  >
+                    查看成品
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => navigate(`/tutorial/${model.id}`)}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  >
+                    再次搭建
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              ) : hasProgress ? (
+                <>
+                  <button
+                    onClick={() => navigate(`/tutorial/${model.id}?step=${progress?.currentStep ?? 0}`)}
+                    className="btn-primary w-full flex items-center justify-center gap-2 mb-3"
+                  >
+                    {/* P0-2: 修复「继续第0步」— currentStep=0 时不显示继续，currentStep>=1 时显示实际步号 */}
+                    继续第{progress?.currentStep ?? 1}步
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => navigate(`/tutorial/${model.id}`)}
+                    className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all bg-gray-100 text-gray-600 hover:bg-gray-200"
+                  >
+                    重新开始
+                    <ChevronRight className="w-5 h-5" />
+                  </button>
+                </>
+              ) : (
                 <button
-                  onClick={() => navigate(`/tutorial/${model.id}?step=${progress?.currentStep ?? 0}`)}
-                  className="btn-primary w-full flex items-center justify-center gap-2 mb-3"
+                  onClick={() => navigate(`/tutorial/${model.id}`)}
+                  className="btn-primary w-full flex items-center justify-center gap-2"
                 >
-                  继续第{progress?.currentStep && progress.currentStep + 1}步
+                  开始搭建
                   <ChevronRight className="w-5 h-5" />
                 </button>
-              ) : null}
-              <button
-                onClick={() => navigate(`/tutorial/${model.id}`)}
-                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all ${
-                  hasProgress
-                    ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                    : 'btn-primary'
-                }`}
-              >
-                {hasProgress ? '重新开始' : '开始搭建'}
-                <ChevronRight className="w-5 h-5" />
-              </button>
+              )}
             </div>
           </div>
         </div>

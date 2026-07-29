@@ -1,6 +1,7 @@
 import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, Home, Car, Rocket, Cat, Castle, Grid3X3, BookOpen, Pencil } from 'lucide-react';
 import { models, difficultyLabels, difficultyColors } from '../data/models';
+import { ModelCover } from '../components/ModelCover';
 
 const themes = [
   { id: 'house', label: '房子', icon: Home, color: 'bg-red-100 text-red-600' },
@@ -47,11 +48,8 @@ export function HomePage() {
           <div className="md:flex md:gap-8 md:items-start">
             <div className="md:w-2/3 bg-white rounded-2xl card-shadow overflow-hidden">
               <div className="relative">
-                <img
-                  src={featuredModel.coverImage}
-                  alt={featuredModel.name}
-                  className="w-full h-48 md:h-80 object-cover"
-                />
+                {/* P0-6: 使用真实3D渲染封面 */}
+                <ModelCover model={featuredModel} className="w-full h-48 md:h-80 object-cover" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
                 <div className="absolute bottom-4 left-4 right-4 text-white">
                   <div className="flex items-center gap-2 mb-1">
@@ -175,11 +173,8 @@ export function HomePage() {
                 className="flex-shrink-0 w-32 bg-white rounded-xl card-shadow overflow-hidden transform transition-all duration-200 hover:scale-[1.02]"
               >
                 <div className="aspect-square">
-                  <img
-                    src={model.coverImage}
-                    alt={model.name}
-                    className="w-full h-full object-cover"
-                  />
+                  {/* P0-6: 使用真实3D渲染封面 */}
+                  <ModelCover model={model} className="w-full h-full object-cover" />
                 </div>
                 <div className="p-2">
                   <h4 className="font-medium text-gray-800 text-sm truncate">{model.name}</h4>
@@ -199,11 +194,8 @@ export function HomePage() {
                 className="bg-white rounded-xl card-shadow overflow-hidden transform transition-all duration-200 hover:scale-[1.02]"
               >
                 <div className="aspect-[4/3]">
-                  <img
-                    src={model.coverImage}
-                    alt={model.name}
-                    className="w-full h-full object-cover"
-                  />
+                  {/* P0-6: 使用真实3D渲染封面 */}
+                  <ModelCover model={model} className="w-full h-full object-cover" />
                 </div>
                 <div className="p-3">
                   <h4 className="font-medium text-gray-800 truncate">{model.name}</h4>

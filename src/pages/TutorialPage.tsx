@@ -299,47 +299,59 @@ function TutorialContent({ modelId }: { modelId: string }) {
               <div className="h-full bg-primary-500 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
             </div>
             <div className="flex gap-1.5 mt-3 overflow-x-auto pb-1">
-              {steps.map((_, index) => (
-                <button
-                  key={index}
-                  onClick={() => setCurrentStep(index)}
-                  className={`flex-shrink-0 w-8 h-8 rounded-lg transition-all flex items-center justify-center text-xs font-medium ${
-                    index === currentStep
-                      ? 'bg-primary-500 text-white'
-                      : index < currentStep
-                      ? 'bg-green-100 text-green-600'
-                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                  }`}
-                >
-                  {index < currentStep ? <Check className="w-4 h-4" /> : index + 1}
-                </button>
-              ))}
+              {steps.map((_, index) => {
+                const isCompleted = index < currentStep;
+                const isCurrent = index === currentStep;
+                return (
+                  <button
+                    key={index}
+                    onClick={() => setCurrentStep(index)}
+                    aria-current={isCurrent ? 'step' : undefined}
+                    aria-label={isCompleted ? `第${index + 1}步，已完成` : `第${index + 1}步`}
+                    className={`flex-shrink-0 w-8 h-8 rounded-lg transition-all flex items-center justify-center text-xs font-medium border ${
+                      isCurrent
+                        ? 'bg-primary-500 text-white border-primary-600 ring-2 ring-primary-300 ring-offset-1'
+                        : isCompleted
+                        ? 'bg-green-100 text-green-700 border-green-300'
+                        : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                    }`}
+                  >
+                    {isCompleted ? <Check className="w-4 h-4" aria-hidden="true" /> : <span aria-hidden="true">{index + 1}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* 移动端步骤选择器 */}
           <div className="md:hidden px-4 py-3 border-b border-gray-100 bg-white">
             <div className="flex gap-2 overflow-x-auto pb-1">
-              {steps.map((_, index) => (
-                <button
-                  key={index}
-                  onClick={() => setCurrentStep(index)}
-                  className={`flex-shrink-0 w-10 h-10 rounded-xl transition-all flex items-center justify-center font-medium ${
-                    index === currentStep
-                      ? 'bg-primary-500 text-white ring-2 ring-primary-300 ring-offset-2'
-                      : index < currentStep
-                      ? 'bg-green-100 text-green-600'
-                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                  }`}
-                >
-                  {index < currentStep ? <CheckCircle className="w-5 h-5" /> : <span className="text-sm">{index + 1}</span>}
-                </button>
-              ))}
+              {steps.map((_, index) => {
+                const isCompleted = index < currentStep;
+                const isCurrent = index === currentStep;
+                return (
+                  <button
+                    key={index}
+                    onClick={() => setCurrentStep(index)}
+                    aria-current={isCurrent ? 'step' : undefined}
+                    aria-label={isCompleted ? `第${index + 1}步，已完成` : `第${index + 1}步`}
+                    className={`flex-shrink-0 w-10 h-10 rounded-xl transition-all flex items-center justify-center font-medium border ${
+                      isCurrent
+                        ? 'bg-primary-500 text-white border-primary-600 ring-2 ring-primary-300 ring-offset-2'
+                        : isCompleted
+                        ? 'bg-green-100 text-green-700 border-green-300'
+                        : 'bg-gray-100 text-gray-500 border-gray-200 hover:bg-gray-200'
+                    }`}
+                  >
+                    {isCompleted ? <CheckCircle className="w-5 h-5" aria-hidden="true" /> : <span className="text-sm" aria-hidden="true">{index + 1}</span>}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {/* 滚动内容区 */}
-          <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-4">
+          {/* 滚动内容区 — 移动端底部留出固定按钮条空间 */}
+          <div className="flex-1 overflow-y-auto px-4 md:px-5 py-4 space-y-4 pb-28 md:pb-4">
             {partDetails.length > 0 && (
               <div className="bg-primary-50 rounded-2xl p-4">
                 <div className="flex items-center gap-2 mb-3">
@@ -377,8 +389,8 @@ function TutorialContent({ modelId }: { modelId: string }) {
             </div>
           </div>
 
-          {/* 底部按钮 */}
-          <div className="px-4 md:px-5 py-4 border-t border-gray-100 bg-white">
+          {/* P0-3: 桌面端底部按钮 — 保持在右侧面板底部，首屏可见 */}
+          <div className="hidden md:block px-4 md:px-5 py-4 border-t border-gray-100 bg-white">
             <div className="flex gap-3">
               <button
                 onClick={handlePrev}
@@ -399,6 +411,34 @@ function TutorialContent({ modelId }: { modelId: string }) {
               </button>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* P0-3: 移动端固定底部按钮条 — 始终可见，不被说明文字挤出首屏 */}
+      <div
+        className="md:hidden fixed bottom-16 left-0 right-0 bg-white border-t border-gray-100 px-4 py-3 z-30 safe-area-bottom"
+        data-testid="mobile-step-nav"
+      >
+        <div className="flex gap-3">
+          <button
+            onClick={handlePrev}
+            disabled={isFirstStep}
+            data-testid="prev-step-mobile"
+            aria-label="上一步"
+            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all bg-gray-100 text-gray-700 hover:bg-gray-200 active:scale-95 ${isFirstStep ? 'opacity-50 cursor-not-allowed' : ''}`}
+          >
+            <ArrowLeft className="w-5 h-5" />
+            上一步
+          </button>
+          <button
+            onClick={handleNext}
+            data-testid="next-step-mobile"
+            aria-label={isLastStep ? '完成' : '下一步'}
+            className="flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-medium transition-all bg-primary-500 text-white hover:bg-primary-600 active:scale-95 shadow-lg"
+          >
+            {isLastStep ? '完成' : '下一步'}
+            <ArrowRight className="w-5 h-5" />
+          </button>
         </div>
       </div>
     </div>

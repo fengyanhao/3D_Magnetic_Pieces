@@ -7,78 +7,9 @@ import { rocketV2 } from './v2/rocket';
 import { castleV2 } from './v2/castle';
 import { flagshipHouseV2 } from './v2/flagship-house';
 
-function svgCover(content: string): string {
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400">${content}</svg>`);
-}
-
-export const houseCover = svgCover(`
-  <defs><linearGradient id="hg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FFF0F0"/><stop offset="100%" stop-color="#E8F4FD"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#hg)"/>
-  <rect x="120" y="180" width="160" height="140" rx="8" fill="rgba(255,107,107,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="80,180 200,80 320,180" fill="rgba(52,152,219,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="170" y="240" width="60" height="80" rx="4" fill="rgba(255,230,109,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-`);
-
-export const carCover = svgCover(`
-  <defs><linearGradient id="cg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F0F8FF"/><stop offset="100%" stop-color="#FFF8E7"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#cg)"/>
-  <rect x="80" y="190" width="240" height="80" rx="12" fill="rgba(255,107,107,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="140" y="150" width="120" height="50" rx="8" fill="rgba(255,107,107,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <circle cx="110" cy="280" r="28" fill="rgba(44,62,80,0.7)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-  <circle cx="290" cy="280" r="28" fill="rgba(44,62,80,0.7)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-`);
-
-export const rocketCover = svgCover(`
-  <defs><linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#E8E8FF"/><stop offset="100%" stop-color="#FFF0F0"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#rg)"/>
-  <rect x="160" y="120" width="80" height="160" rx="8" fill="rgba(236,240,241,0.8)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="200,40 260,120 140,120" fill="rgba(231,76,60,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="120,280 160,200 160,280" fill="rgba(231,76,60,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-  <polygon points="280,280 240,200 240,280" fill="rgba(231,76,60,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-  <polygon points="180,300 200,360 220,300" fill="rgba(255,230,109,0.7)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-`);
-
-export const catCover = svgCover(`
-  <defs><linearGradient id="ag" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#FFF0F5"/><stop offset="100%" stop-color="#FFF8F0"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#ag)"/>
-  <ellipse cx="200" cy="220" rx="90" ry="80" fill="rgba(245,183,177,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="130,160 150,80 190,140" fill="rgba(245,183,177,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="270,160 250,80 210,140" fill="rgba(245,183,177,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <circle cx="165" cy="200" r="14" fill="rgba(44,62,80,0.7)"/>
-  <circle cx="235" cy="200" r="14" fill="rgba(44,62,80,0.7)"/>
-  <polygon points="200,225 210,245 190,245" fill="rgba(255,230,109,0.8)"/>
-`);
-
-export const castleCover = svgCover(`
-  <defs><linearGradient id="clg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F5F0FF"/><stop offset="100%" stop-color="#FFF0F8"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#clg)"/>
-  <rect x="100" y="180" width="200" height="140" rx="4" fill="rgba(255,107,107,0.6)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="140" y="100" width="40" height="80" rx="4" fill="rgba(255,107,107,0.6)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="220" y="100" width="40" height="80" rx="4" fill="rgba(255,107,107,0.6)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="120,100 160,40 200,100" fill="rgba(155,89,182,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="200,100 240,40 280,100" fill="rgba(155,89,182,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="175" y="240" width="50" height="80" rx="4" fill="rgba(255,230,109,0.5)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-`);
-
-export const penguinCover = svgCover(`
-  <defs><linearGradient id="pg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F0F0F0"/><stop offset="100%" stop-color="#E8F4FD"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#pg)"/>
-  <ellipse cx="200" cy="210" rx="85" ry="100" fill="rgba(44,62,80,0.75)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <ellipse cx="200" cy="220" rx="50" ry="65" fill="rgba(255,255,255,0.8)" stroke="rgba(255,255,255,0.9)" stroke-width="3"/>
-  <circle cx="175" cy="180" r="10" fill="rgba(44,62,80,0.8)"/>
-  <circle cx="225" cy="180" r="10" fill="rgba(44,62,80,0.8)"/>
-  <polygon points="200,195 215,215 185,215" fill="rgba(255,230,109,0.9)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
-`);
-
-export const flagshipHouseCover = svgCover(`
-  <defs><linearGradient id="fhg" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#F0F8FF"/><stop offset="100%" stop-color="#FFF8E7"/></linearGradient></defs>
-  <rect width="400" height="400" fill="url(#fhg)"/>
-  <rect x="100" y="200" width="200" height="120" rx="6" fill="rgba(52,152,219,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="100" y="140" width="200" height="60" rx="6" fill="rgba(255,230,109,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <polygon points="80,140 200,50 320,140" fill="rgba(78,205,150,0.7)" stroke="rgba(255,255,255,0.9)" stroke-width="4"/>
-  <rect x="100" y="260" width="200" height="60" rx="4" fill="rgba(255,107,107,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="3"/>
-  <rect x="170" y="280" width="60" height="40" rx="4" fill="rgba(255,230,109,0.6)" stroke="rgba(255,255,255,0.8)" stroke-width="2"/>
-`);
+// P0-6: 已删除所有手绘 data-URI SVG 封面（houseCover/carCover/...）
+// 内置模型封面改由 useModelCover + renderProjectCover 运行时生成真实3D渲染图
+// 各 v2 模型文件中 coverImage 字段保持为空字符串，由 ModelCover 组件动态填充
 
 export const themeLabels: Record<string, string> = {
   house: '房子',
@@ -145,11 +76,11 @@ export const magnetEdgeColorMap: Record<MagnetColor, string> = {
 };
 
 export const models: Model[] = [
-  { ...houseV2, coverImage: houseCover },
-  { ...carV2, coverImage: carCover },
-  { ...rocketV2, coverImage: rocketCover },
-  { ...catV2, coverImage: catCover },
-  { ...castleV2, coverImage: castleCover },
-  { ...penguinV2, coverImage: penguinCover },
-  { ...flagshipHouseV2, coverImage: flagshipHouseCover },
+  houseV2,
+  carV2,
+  rocketV2,
+  catV2,
+  castleV2,
+  penguinV2,
+  flagshipHouseV2,
 ];

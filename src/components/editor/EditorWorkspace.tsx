@@ -56,7 +56,7 @@ export type Selection =
 /** P1: 编辑器工作模式 */
 export type EditorMode = 'structure' | 'tutorial';
 
-const VALIDATION_DEBOUNCE_MS = 400;
+// P0-5: 移除 VALIDATION_DEBOUNCE_MS — 校验改为用户主动触发，不再需要防抖常量
 
 export function EditorWorkspace() {
   const [history, setHistory] = useState<EditorHistory>(() => createInitialHistory());
@@ -90,22 +90,34 @@ export function EditorWorkspace() {
   const viewport = useViewportSize();
   const isDesktop = viewport.width >= EDITOR_MIN_DESKTOP_WIDTH;
 
-  // 首次加载:尝试恢复最近草稿
+  // P0-5: 草稿恢复确认 — 不自动加载，检测到草稿时提示用户选择
+  const [pendingDraft, setPendingDraft] = useState<{ key: string; name: string } | null>(null);
   useEffect(() => {
     const drafts = draft.list();
     if (drafts.length > 0) {
-      // 加载最近的草稿
-      const p = draft.load(drafts[0].key);
-      Promise.resolve(p).then((proj) => {
-        if (proj) {
-          setHistory(replaceProject(history, proj));
-          setFitRequest({ ts: Date.now() });
-          setMessage({ text: `已恢复草稿: ${proj.metadata.name}`, type: 'info' });
-        }
-      });
+      // 只提示，不自动加载
+      setPendingDraft({ key: drafts[0].key, name: drafts[0].name });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const handleRestoreDraft = useCallback(async () => {
+    if (!pendingDraft) return;
+    const proj = await draft.load(pendingDraft.key);
+    if (proj) {
+      setHistory(replaceProject(history, proj));
+      setFitRequest({ ts: Date.now() });
+      setMessage({ text: `已恢复草稿: ${proj.metadata.name}`, type: 'info' });
+    }
+    setPendingDraft(null);
+  }, [pendingDraft, draft, history]);
+
+  const handleDiscardDraft = useCallback(() => {
+    setPendingDraft(null);
+  }, []);
+
+  // P0-5: 校验状态 — 初始为 null（尚未校验），仅在用户点击校验时运行
+  // handleValidateNow 已在下方定义，此处不再重复
 
   // 自动保存草稿(防抖,键为 project.id)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -123,18 +135,7 @@ export function EditorWorkspace() {
     };
   }, [project, draft]);
 
-  // 校验(防抖)
-  const validationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => {
-    if (validationTimer.current) clearTimeout(validationTimer.current);
-    validationTimer.current = setTimeout(() => {
-      setValidation(runValidation(project));
-    }, VALIDATION_DEBOUNCE_MS);
-    return () => {
-      if (validationTimer.current) clearTimeout(validationTimer.current);
-    };
-  }, [project]);
-
+  // P0-5: 校验不再在 mount/project 变化时自动运行，改为用户主动点击
   /* ----------------- 操作包装器 ----------------- */
   const apply = useCallback((fn: (h: EditorHistory) => EditorHistory) => {
     setHistory((h) => fn(h));
@@ -649,6 +650,43 @@ export function EditorWorkspace() {
           </button>
         </div>
       </div>
+
+      {/* P0-5: 草稿恢复确认 — 检测到草稿时提示用户选择，不自动加载 */}
+      {pendingDraft && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="draft-restore-title"
+          data-testid="draft-restore-dialog"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 id="draft-restore-title" className="text-lg font-semibold text-gray-800 mb-2">
+              发现未完成的草稿
+            </h3>
+            <p className="text-sm text-gray-600 mb-1">
+              上次有未完成的草稿：<span className="font-medium text-gray-800">{pendingDraft.name}</span>
+            </p>
+            <p className="text-xs text-gray-500 mb-5">是否恢复该草稿继续编辑？丢弃后将开始空白方案。</p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleRestoreDraft}
+                className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2"
+                data-testid="draft-restore-confirm"
+              >
+                恢复草稿
+              </button>
+              <button
+                onClick={handleDiscardDraft}
+                className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                data-testid="draft-restore-discard"
+              >
+                丢弃草稿
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* P0-5: 草稿管理面板 */}
       {showDrafts && (
