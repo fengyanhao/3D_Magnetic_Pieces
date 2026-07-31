@@ -77,18 +77,29 @@ export function findCompatibleTargets(source: PortRef, project: EditorProject): 
   const getShape = makeGetShape(project);
   const sourceShape = getShape(source.pieceId);
   if (!sourceShape) return [];
-  const sourcePort = getPort(sourceShape, source.portId);
-  if (!sourcePort) return [];
+
+  // P0-三.2: 修复空 portId 问题。portId 为空时,枚举源零件所有未占用端口,
+  // 对每个端口查找兼容目标并合并去重。
+  const sourcePorts = source.portId
+    ? [getPort(sourceShape, source.portId)].filter(Boolean) as typeof sourceShape.ports
+    : sourceShape.ports.filter((p) => !isPortOccupied(source.pieceId, p.portId, project.connections));
 
   const results: CompatibleTarget[] = [];
-  for (const piece of project.pieces) {
-    if (piece.id === source.pieceId) continue;
-    const shape = getShape(piece.id);
-    if (!shape) continue;
-    for (const port of shape.ports) {
-      if (isPortOccupied(piece.id, port.portId, project.connections)) continue;
-      if (!portsCompatible(sourcePort, port)) continue;
-      results.push({ pieceId: piece.id, portId: port.portId, edgeId: port.edgeId, length: port.length });
+  const seen = new Set<string>();
+  for (const sourcePort of sourcePorts) {
+    if (isPortOccupied(source.pieceId, sourcePort.portId, project.connections)) continue;
+    for (const piece of project.pieces) {
+      if (piece.id === source.pieceId) continue;
+      const shape = getShape(piece.id);
+      if (!shape) continue;
+      for (const port of shape.ports) {
+        if (isPortOccupied(piece.id, port.portId, project.connections)) continue;
+        if (!portsCompatible(sourcePort, port)) continue;
+        const key = `${piece.id}:${port.portId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({ pieceId: piece.id, portId: port.portId, edgeId: port.edgeId, length: port.length });
+      }
     }
   }
   return results;
@@ -145,18 +156,24 @@ const DEFAULT_DIHEDRAL_CANDIDATES: { dihedralDeg: number; flip: boolean }[] = [
 
 /**
  * 为一个待放置零件寻找最近的吸附候选(用于拖放时自动吸附)。
+ *
+ * P0-三.1: 新增 liveAttachTransform 参数,磁吸候选必须基于 TransformControls
+ * 当前实时 position/quaternion 计算,而不是上一轮 project.transforms。
+ * 若不传则回退到 getDisplayTransforms(project)(向后兼容)。
  */
 export function findBestSnapCandidate(
   attachPieceId: string,
   project: EditorProject,
   candidates: { dihedralDeg: number; flip: boolean }[] = DEFAULT_DIHEDRAL_CANDIDATES,
+  liveAttachTransform?: PieceTransform,
 ): SnapProposal | null {
   const getShape = makeGetShape(project);
   const attachShape = getShape(attachPieceId);
   if (!attachShape) return null;
 
+  // P0-三.1: 优先使用 liveAttachTransform,避免使用陈旧的 project.transforms
   const display = getDisplayTransforms(project);
-  const attachTf = display[attachPieceId];
+  const attachTf = liveAttachTransform ?? display[attachPieceId];
   if (!attachTf) return null;
 
   let best: SnapProposal | null = null;
@@ -169,19 +186,22 @@ export function findBestSnapCandidate(
       if (basePiece.id === attachPieceId) continue;
       const baseShape = getShape(basePiece.id);
       if (!baseShape) continue;
+      const baseTf = display[basePiece.id];
+      if (!baseTf) continue;
       for (const basePort of baseShape.ports) {
         if (isPortOccupied(basePiece.id, basePort.portId, project.connections)) continue;
         if (!portsCompatible(attachPort, basePort)) continue;
 
         for (const cand of candidates) {
-          const tf = computeSnapTransform(
-            basePiece.id,
+          // P0-三.1: 直接用 baseTf 计算,而不是依赖 project.transforms
+          const tf = computeTransformFromConnection(
+            baseTf,
+            baseShape,
             basePort.portId,
-            attachPieceId,
+            attachShape,
             attachPort.portId,
             cand.dihedralDeg,
             cand.flip,
-            project,
           );
           if (!tf) continue;
           const dist = tf.position.distanceTo(attachTf.position);

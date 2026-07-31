@@ -14,12 +14,18 @@ export interface SolverContext {
    * 不提供时回退到原点 + Q_GROUND(保持向后兼容)。
    */
   rootTransform?: PieceTransform;
+  /**
+   * P0-四.5: 地面锁定开关。
+   * true(默认,用户端预览用): 求解后强制最小 Y=0,保证结构贴地。
+   * false(编辑器用): 不改写根零件高度,允许自由 XYZ 移动。
+   */
+  groundLock?: boolean;
 }
 
 const Q_GROUND = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
 
 export function solveConnections(ctx: SolverContext): SolverResult {
-  const { pieces, connections, rootPieceId, getShapeForPiece, rootTransform } = ctx;
+  const { pieces, connections, rootPieceId, getShapeForPiece, rootTransform, groundLock = true } = ctx;
 
   const transforms: Record<string, PieceTransform> = {};
   const visited = new Set<string>();
@@ -98,12 +104,15 @@ export function solveConnections(ctx: SolverContext): SolverResult {
     }
   }
 
-  const minY = computeMinWorldY(pieces, transforms, getShapeForPiece);
-  if (minY !== 0) {
-    const offset = new Vector3(0, -minY, 0);
-    for (const p of pieces) {
-      const tf = transforms[p.id];
-      if (tf) tf.position.add(offset);
+  // P0-四.5: 地面锁定改为可选,编辑器中 groundLock=false 时不强制贴地
+  if (groundLock) {
+    const minY = computeMinWorldY(pieces, transforms, getShapeForPiece);
+    if (minY !== 0) {
+      const offset = new Vector3(0, -minY, 0);
+      for (const p of pieces) {
+        const tf = transforms[p.id];
+        if (tf) tf.position.add(offset);
+      }
     }
   }
 

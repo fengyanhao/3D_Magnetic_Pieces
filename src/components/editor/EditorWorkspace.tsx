@@ -7,7 +7,8 @@ import {
   addPieceAction, deletePieceAction, duplicatePieceAction, setPieceColorAction,
   setPieceTransformAction, createConnectionAction, removeConnectionAction,
   updateConnectionAction, addStepAction, deleteStepAction, moveStepAction,
-  updateStepAction, addPieceToStepAction, saveCameraPresetAction, updateMetadataAction,
+  updateStepAction, addPieceToStepAction, addConnectionToStepAction,
+  removeConnectionFromStepAction, saveCameraPresetAction, updateMetadataAction,
   // P1: 教学编排 actions
   setStepCameraAction, captureCurrentViewAsStepCameraAction,
   setPieceEntranceAction, batchSetEntranceTypeAction, patchPieceEntranceAction,
@@ -29,7 +30,7 @@ import {
 import { EditorProject, SerializableTransform } from '../../editor/types';
 import { findConnectionToParent, computeDihedralFromMovedTransform } from '../../editor/snap';
 import {
-  PieceTransform, StepCamera, PieceEntranceConfig, EntranceType,
+  PieceTransform, StepCamera, PieceEntranceConfig, EntranceType, Connection,
 } from '../../engine/types';
 import { models } from '../../data/models';
 import { Model } from '../../data/types';
@@ -80,6 +81,14 @@ export function EditorWorkspace() {
   // 避免每次 setHistory 都触发 solver 重算 / 校验重排 / 自动保存重排。
   // commit 时清空,落回 history.transforms。
   const [liveTransformOverride, setLiveTransformOverride] = useState<{ pieceId: string; tf: SerializableTransform } | null>(null);
+  // P1-五: 已连接零件被移动时弹出三选项弹窗(替代原生 confirm)
+  const [pendingConnectedMove, setPendingConnectedMove] = useState<{
+    pieceId: string;
+    tf: SerializableTransform;
+    parentConn: { index: number; connection: Connection; isPieceA: boolean };
+  } | null>(null);
+  // P1-七: 停止录制确认弹窗
+  const [showStopRecordingConfirm, setShowStopRecordingConfirm] = useState(false);
 
   const project = history.current;
   const draft = useDraftStore();
@@ -148,9 +157,14 @@ export function EditorWorkspace() {
   }, []);
 
   const handleAddPiece = useCallback((shape: any, color: any) => {
-    // 放置到相机视野中心附近
+    // P0-四: 新零件放到视野中心构建平面,按已有零件数量在右方向错开,避免全部重叠
     const target = cameraTargetRef.current;
-    const placePos: [number, number, number] = [target.x, target.y, target.z];
+    const offsetIndex = project.pieces.length; // 第 N 个零件偏移 N 个单位
+    const placePos: [number, number, number] = [
+      target.x + offsetIndex * 1.2,
+      target.y,
+      target.z,
+    ];
     const { history: h, pieceId } = addPieceAction(history, shape, color, placePos);
     // P1: 录制模式下,新零件自动归入当前录制步骤
     let finalHistory = h;
@@ -159,9 +173,10 @@ export function EditorWorkspace() {
       setMessage({ text: `已添加零件并自动加入步骤 #${recordingStepId}(录制中)`, type: 'success' });
     }
     setHistory(finalHistory);
+    // P0-四.3: 新零件添加后自动选中并完整可见
     setSelection({ kind: 'piece', id: pieceId });
     setFocusRequest({ pieceId, ts: Date.now() });
-  }, [history, recordingStepId]);
+  }, [history, recordingStepId, project.pieces.length]);
 
   const handleDeleteSelected = useCallback(() => {
     if (selection.kind === 'piece') {
@@ -192,46 +207,62 @@ export function EditorWorkspace() {
   const handleSetPieceTransform = useCallback((pieceId: string, tf: SerializableTransform) => {
     // P0-3: commit 时清空 live override,让 EditorCanvas 重新用 history.transforms
     setLiveTransformOverride(null);
-    // P0-3: 移动已连接子零件时明确选择"调整连接角度"或"断开后移动",禁止静默忽略
+    // P1-五: 移动已连接子零件时弹出三选项弹窗(替代原生 confirm)
+    // 取消 = 完全不改变项目
     const parentConn = findConnectionToParent(pieceId, project);
     if (parentConn) {
-      const choice = confirm(
-        '该零件是已连接组件的成员。\n\n点击"确定"=调整连接角度(保持连接,根据新朝向更新二面角)\n点击"取消"=断开后移动(移除连接,零件变为自由)',
-      );
-      if (choice) {
-        // 调整连接角度
-        const newTf: PieceTransform = {
-          position: new THREE.Vector3(tf.position[0], tf.position[1], tf.position[2]),
-          quaternion: new THREE.Quaternion(tf.quaternion[0], tf.quaternion[1], tf.quaternion[2], tf.quaternion[3]),
-        };
-        const result = computeDihedralFromMovedTransform(pieceId, newTf, project);
-        if (result) {
-          apply((h) => updateConnectionAction(h, result.index, { dihedralDeg: result.dihedralDeg }));
-          setMessage({ text: `已调整连接角度为 ${result.dihedralDeg.toFixed(1)}°`, type: 'success' });
-        } else {
-          apply((h) => setPieceTransformAction(h, pieceId, tf));
-        }
-      } else {
-        // 断开后移动
-        apply((h) => removeConnectionAction(h, parentConn.index));
-        apply((h) => setPieceTransformAction(h, pieceId, tf));
-        setMessage({ text: '已断开连接并移动零件', type: 'info' });
-      }
+      setPendingConnectedMove({ pieceId, tf, parentConn });
       return;
     }
     apply((h) => setPieceTransformAction(h, pieceId, tf));
   }, [apply, project]);
 
+  // P1-五: 三选项弹窗 - 保持连接并调整角度
+  const handleConnectedMoveKeep = useCallback(() => {
+    const pending = pendingConnectedMove;
+    if (!pending) return;
+    const { pieceId, tf } = pending;
+    const newTf: PieceTransform = {
+      position: new THREE.Vector3(tf.position[0], tf.position[1], tf.position[2]),
+      quaternion: new THREE.Quaternion(tf.quaternion[0], tf.quaternion[1], tf.quaternion[2], tf.quaternion[3]),
+    };
+    const result = computeDihedralFromMovedTransform(pieceId, newTf, project);
+    if (result) {
+      apply((h) => updateConnectionAction(h, result.index, { dihedralDeg: result.dihedralDeg }));
+      setMessage({ text: `已调整连接角度为 ${result.dihedralDeg.toFixed(1)}°`, type: 'success' });
+    } else {
+      apply((h) => setPieceTransformAction(h, pieceId, tf));
+    }
+    setPendingConnectedMove(null);
+  }, [pendingConnectedMove, project, apply]);
+
+  // P1-五: 三选项弹窗 - 断开连接后移动
+  const handleConnectedMoveDisconnect = useCallback(() => {
+    const pending = pendingConnectedMove;
+    if (!pending) return;
+    const { pieceId, tf, parentConn } = pending;
+    // P1-七: 录制中断开连接也同步移出当前步骤
+    if (recordingStepId !== null) {
+      apply((h) => removeConnectionFromStepAction(h, recordingStepId, parentConn.connection));
+    }
+    apply((h) => removeConnectionAction(h, parentConn.index));
+    apply((h) => setPieceTransformAction(h, pieceId, tf));
+    setMessage({ text: '已断开连接并移动零件', type: 'info' });
+    setPendingConnectedMove(null);
+  }, [pendingConnectedMove, recordingStepId, apply]);
+
+  // P1-五: 三选项弹窗 - 取消(完全不改变项目)
+  const handleConnectedMoveCancel = useCallback(() => {
+    setPendingConnectedMove(null);
+    setMessage({ text: '已取消移动', type: 'info' });
+  }, []);
+
   const handleCreateConnection = useCallback((conn: any) => {
     apply((h) => createConnectionAction(h, conn));
-    // P1: 录制模式下,新连接自动归入当前录制步骤
+    // P1-七: 录制模式下,新连接通过原子 action 自动归入当前录制步骤
     const targetStepId = recordingStepId ?? currentStepId;
     if (targetStepId !== null) {
-      apply((h) => {
-        const step = h.current.steps.find((s) => s.id === targetStepId);
-        if (step) step.addedConnections.push(conn);
-        return { ...h };
-      });
+      apply((h) => addConnectionToStepAction(h, targetStepId, conn));
       setMessage({ text: '已创建连接并加入当前步骤', type: 'success' });
     }
   }, [apply, currentStepId, recordingStepId]);
@@ -241,8 +272,13 @@ export function EditorWorkspace() {
   }, [apply]);
 
   const handleRemoveConnection = useCallback((index: number) => {
+    // P1-七: 录制中断开连接,同步从当前步骤移除
+    const conn = project.connections[index];
+    if (recordingStepId !== null && conn) {
+      apply((h) => removeConnectionFromStepAction(h, recordingStepId, conn));
+    }
     apply((h) => removeConnectionAction(h, index));
-  }, [apply]);
+  }, [apply, project.connections, recordingStepId]);
 
   const handleAddStep = useCallback(() => {
     const { history: h, stepId } = addStepAction(history);
@@ -328,20 +364,37 @@ export function EditorWorkspace() {
     setMessage({ text: '已将零件移出本步', type: 'info' });
   }, [apply]);
 
-  // P1: 录制模式开关
+  // P1-七: 录制模式开关 - 开始录制直接生效;停止录制需显式确认
   const handleToggleRecording = useCallback((stepId: number) => {
-    setRecordingStepId((cur) => (cur === stepId ? null : stepId));
-    setMessage({
-      text: recordingStepId === stepId ? '已停止录制' : `已开始录制到步骤 #${stepId},新零件和连接将自动加入`,
-      type: 'info',
-    });
+    if (recordingStepId === stepId) {
+      // 正在录制该步骤,点击即请求停止(弹出确认)
+      setShowStopRecordingConfirm(true);
+      return;
+    }
+    // 开始录制(或切换到录制另一个步骤)
+    setRecordingStepId(stepId);
+    setMessage({ text: `已开始录制到步骤 #${stepId},新零件和连接将自动加入`, type: 'success' });
   }, [recordingStepId]);
 
-  // P1: 切换模式时停止录制
+  // P1-七: 确认停止录制
+  const handleConfirmStopRecording = useCallback(() => {
+    const stoppedStep = recordingStepId;
+    setRecordingStepId(null);
+    setShowStopRecordingConfirm(false);
+    if (stoppedStep !== null) {
+      setMessage({ text: `已停止录制步骤 #${stoppedStep}`, type: 'info' });
+    }
+  }, [recordingStepId]);
+
+  // P1-七: 取消停止录制(继续录制)
+  const handleCancelStopRecording = useCallback(() => {
+    setShowStopRecordingConfirm(false);
+  }, []);
+
+  // P1-七: 切换模式时不再静默停止录制,保持录制状态跨结构/教学模式
   const handleModeChange = useCallback((newMode: EditorMode) => {
     setMode(newMode);
-    if (recordingStepId !== null) setRecordingStepId(null);
-  }, [recordingStepId]);
+  }, []);
 
   // P1: 当前编辑器视图(供 TutorialOrchestrationPanel 显示)
   const currentView = useMemo(() => {
@@ -626,7 +679,8 @@ export function EditorWorkspace() {
           教学编排
         </button>
         <div className="ml-auto flex items-center gap-2">
-          {mode === 'tutorial' && currentStepId !== null && (
+          {/* P1-七: 录制按钮在两种模式下均可用(只要有选中步骤) */}
+          {currentStepId !== null && (
             <button
               onClick={() => handleToggleRecording(currentStepId)}
               className={`flex items-center gap-1.5 px-3 py-1 text-xs font-medium rounded transition-colors ${
@@ -635,6 +689,7 @@ export function EditorWorkspace() {
                   : 'bg-red-50 text-red-600 hover:bg-red-100'
               }`}
               data-testid="record-toggle"
+              aria-pressed={recordingStepId === currentStepId}
             >
               <span className={`w-2 h-2 rounded-full ${recordingStepId === currentStepId ? 'bg-white' : 'bg-red-500'}`} />
               {recordingStepId === currentStepId ? '录制中(点击停止)' : '开始录制本步'}
@@ -650,6 +705,26 @@ export function EditorWorkspace() {
           </button>
         </div>
       </div>
+
+      {/* P1-七: 顶部始终显示的红色"正在录制第 N 步"状态条 + 停止录制按钮(跨模式可见) */}
+      {recordingStepId !== null && (
+        <div
+          className="flex items-center gap-3 px-4 py-1.5 bg-red-600 text-white text-sm font-medium flex-shrink-0"
+          data-testid="recording-status-bar"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="w-2.5 h-2.5 rounded-full bg-white animate-pulse" aria-hidden="true" />
+          <span>正在录制第 {recordingStepId} 步 — 新增零件、连接和断开操作会实时加入该步骤</span>
+          <button
+            onClick={() => setShowStopRecordingConfirm(true)}
+            className="ml-auto px-3 py-0.5 bg-white text-red-600 rounded text-xs font-semibold hover:bg-red-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            data-testid="stop-recording-button"
+          >
+            停止录制
+          </button>
+        </div>
+      )}
 
       {/* P0-5: 草稿恢复确认 — 检测到草稿时提示用户选择，不自动加载 */}
       {pendingDraft && (
@@ -697,6 +772,88 @@ export function EditorWorkspace() {
           onDelete={handleDeleteDraft}
           onClose={() => setShowDrafts(false)}
         />
+      )}
+
+      {/* P1-五: 已连接零件移动 - 三选项弹窗(替代原生 confirm) */}
+      {pendingConnectedMove && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="connected-move-title"
+          data-testid="connected-move-dialog"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-lg w-full p-6">
+            <h3 id="connected-move-title" className="text-lg font-semibold text-gray-800 mb-2">
+              该零件是已连接组件的成员
+            </h3>
+            <p className="text-sm text-gray-600 mb-5">
+              移动该零件会影响其连接关系。请选择处理方式:
+            </p>
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleConnectedMoveKeep}
+                className="px-4 py-2.5 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2"
+                data-testid="connected-move-keep"
+              >
+                <div className="font-semibold">保持连接并调整角度</div>
+                <div className="text-xs text-blue-100 mt-0.5">根据新朝向自动更新二面角,连接关系不变</div>
+              </button>
+              <button
+                onClick={handleConnectedMoveDisconnect}
+                className="px-4 py-2.5 bg-amber-500 text-white rounded-lg font-medium hover:bg-amber-600 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 focus-visible:ring-offset-2"
+                data-testid="connected-move-disconnect"
+              >
+                <div className="font-semibold">断开连接后移动</div>
+                <div className="text-xs text-amber-100 mt-0.5">移除该连接,零件变为自由状态可任意移动</div>
+              </button>
+              <button
+                onClick={handleConnectedMoveCancel}
+                className="px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                data-testid="connected-move-cancel"
+              >
+                <div className="font-semibold">取消</div>
+                <div className="text-xs text-gray-500 mt-0.5">不改变项目,零件回到原位</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P1-七: 停止录制确认弹窗 */}
+      {showStopRecordingConfirm && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="stop-recording-title"
+          data-testid="stop-recording-dialog"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 id="stop-recording-title" className="text-lg font-semibold text-gray-800 mb-2">
+              确认停止录制?
+            </h3>
+            <p className="text-sm text-gray-600 mb-5">
+              停止后,后续新增的零件和连接将不再自动加入步骤 #{recordingStepId}。已录制的内容会保留。
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={handleConfirmStopRecording}
+                className="flex-1 px-4 py-2.5 bg-red-500 text-white rounded-lg font-medium hover:bg-red-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-red-300 focus-visible:ring-offset-2"
+                data-testid="stop-recording-confirm"
+              >
+                停止录制
+              </button>
+              <button
+                onClick={handleCancelStopRecording}
+                className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                data-testid="stop-recording-cancel"
+              >
+                继续录制
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {message && (

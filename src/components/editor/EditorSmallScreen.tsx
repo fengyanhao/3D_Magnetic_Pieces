@@ -1,13 +1,14 @@
 /**
  * P1: 编辑器小屏提示页
  *
- * 当视口宽度 < 1024px 时显示,告知用户编辑器是电脑端专业工具。
+ * 当视口宽度 < 1280px 时显示,告知用户编辑器是电脑端专业工具。
  * 提供"返回首页"入口,避免在小屏上挤压工作台造成糟糕体验。
  *
  * 移动端用户仍可正常浏览用户端教学(/tutorial/:id)。
  */
 import { Link } from 'react-router-dom';
 import { Monitor, Smartphone, Home, ArrowLeft } from 'lucide-react';
+import { EDITOR_MIN_DESKTOP_WIDTH } from '../../hooks/useViewportSize';
 
 interface EditorSmallScreenProps {
   /** 当前视口宽度,用于在提示中展示 */
@@ -15,6 +16,7 @@ interface EditorSmallScreenProps {
 }
 
 export function EditorSmallScreen({ currentWidth }: EditorSmallScreenProps) {
+  const width = currentWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 0);
   return (
     <div
       className="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-purple-50 px-6 py-12"
@@ -37,19 +39,17 @@ export function EditorSmallScreen({ currentWidth }: EditorSmallScreenProps) {
         <div className="bg-gray-50 rounded-xl p-4 mb-6 text-left">
           <div className="flex items-center justify-between text-sm mb-2">
             <span className="text-gray-500">当前屏幕宽度</span>
-            <span className="font-mono text-gray-800">
-              {currentWidth ?? (typeof window !== 'undefined' ? window.innerWidth : 0)}px
-            </span>
+            <span className="font-mono text-gray-800">{width}px</span>
           </div>
           <div className="flex items-center justify-between text-sm">
             <span className="text-gray-500">最低要求</span>
-            <span className="font-mono text-gray-800">1024px</span>
+            <span className="font-mono text-gray-800">{EDITOR_MIN_DESKTOP_WIDTH}px</span>
           </div>
           <div className="mt-3 h-2 bg-gray-200 rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-blue-400 to-purple-400 rounded-full transition-all"
               style={{
-                width: `${Math.min(100, ((currentWidth ?? 0) / 1024) * 100)}%`,
+                width: `${Math.min(100, (width / EDITOR_MIN_DESKTOP_WIDTH) * 100)}%`,
               }}
             />
           </div>

@@ -54,8 +54,8 @@ export function useViewportSize(throttleMs: number = 100): ViewportSize {
   return size;
 }
 
-/** 编辑器桌面端最低宽度(px),小于此值显示小屏提示。 */
-export const EDITOR_MIN_DESKTOP_WIDTH = 1024;
+/** P2-八: 编辑器桌面端最低宽度(px),小于此值显示小屏提示。 */
+export const EDITOR_MIN_DESKTOP_WIDTH = 1280;
 
 /** 是否满足编辑器桌面端宽度要求。 */
 export function useEditorDesktopEligible(): boolean {

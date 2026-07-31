@@ -70,13 +70,18 @@ function pushHistory(h: EditorHistory): EditorHistory {
 
 /** 修改 current 但不入栈(用于自动同步 transforms / updatedAt 等派生字段)。 */
 export function updateCurrent(h: EditorHistory, updater: (p: EditorProject) => EditorProject): EditorHistory {
-  return { ...h, current: updater(h.current) };
+  // P0-四.7: 克隆 current 后再传给 updater,避免 updater 中的 in-place mutation
+  // 在 React Strict Mode(double-invocation)下污染原始状态。
+  return { ...h, current: updater(cloneProject(h.current)) };
 }
 
 /** 修改 current 并入栈(用于用户主动操作)。 */
 export function commit(h: EditorHistory, updater: (p: EditorProject) => EditorProject): EditorHistory {
   const next = pushHistory(h);
-  const current = updater(next.current);
+  // P0-四.7: 克隆 current 后再传给 updater,避免 in-place mutation 污染 h.current。
+  // React Strict Mode 下 updater 会被调用两次:第一次 mutation 会改变 h.current,
+  // 第二次 pushHistory 会 clone 已被污染的 h.current → past 条目值错误,撤销无效。
+  const current = updater(cloneProject(next.current));
   return { ...next, current: { ...current, updatedAt: new Date().toISOString() } };
 }
 
@@ -245,6 +250,22 @@ export function setPieceTransformAction(
   });
 }
 
+/**
+ * P0-四.7: 合并提交 — 更新 transform 但不入栈(用于长按按键合并)。
+ * 首次按键用 setPieceTransformAction(入栈),后续按键用此函数(只更新 current)。
+ * 这样一次"按键序列"只产生一条历史记录,撤销一次即可回退。
+ */
+export function setPieceTransformMergedAction(
+  h: EditorHistory,
+  pieceId: string,
+  transform: { position: [number, number, number]; quaternion: [number, number, number, number] },
+): EditorHistory {
+  return updateCurrent(h, (p) => {
+    p.transforms[pieceId] = transform;
+    return p;
+  });
+}
+
 /* ----------------- 连接操作 ----------------- */
 
 /** 创建连接并立即重新求解 transforms。 */
@@ -401,6 +422,24 @@ export function addConnectionToStepAction(
     const step = p.steps.find((s) => s.id === stepId);
     if (!step) return p;
     step.addedConnections.push(connection);
+    return p;
+  });
+}
+
+/** P1-七: 录制期间断开连接时,把对应连接从步骤的 addedConnections 中移除。 */
+export function removeConnectionFromStepAction(
+  h: EditorHistory,
+  stepId: number,
+  connection: Connection,
+): EditorHistory {
+  return commit(h, (p) => {
+    const step = p.steps.find((s) => s.id === stepId);
+    if (!step) return p;
+    step.addedConnections = step.addedConnections.filter(
+      (c) =>
+        !(c.pieceA === connection.pieceA && c.portA === connection.portA &&
+          c.pieceB === connection.pieceB && c.portB === connection.portB),
+    );
     return p;
   });
 }

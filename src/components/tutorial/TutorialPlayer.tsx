@@ -385,9 +385,13 @@ export function TutorialPlayer({
   const step = steps[currentStep];
 
   // 通知外部步骤变化
+  // P1-六: 使用 ref 存储 onStepChange,避免因父组件每次 render 传入新函数引用
+  // 导致 useEffect 反复触发 → setState → 重渲染 → 无限循环(Maximum update depth)
+  const onStepChangeRef = useRef(onStepChange);
+  onStepChangeRef.current = onStepChange;
   useEffect(() => {
-    onStepChange?.(currentStep);
-  }, [currentStep, onStepChange]);
+    onStepChangeRef.current?.(currentStep);
+  }, [currentStep]);
 
   // 计算可见零件（累积到当前步骤）
   const visibleIds = useMemo(() => {

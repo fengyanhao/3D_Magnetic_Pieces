@@ -96,7 +96,7 @@ body {
     transform: none;
   }
   
-  .hover\:scale-[1.02]:hover {
+  .hover\:scale-\[1\.02\]:hover {
     transform: none;
   }
 }

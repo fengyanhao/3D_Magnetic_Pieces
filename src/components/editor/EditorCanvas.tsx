@@ -4,7 +4,7 @@ import { OrbitControls, Line, TransformControls, GizmoHelper, GizmoViewcube } fr
 import * as THREE from 'three';
 import { MagnetColor } from '../../data/types';
 import { getShapeDef } from '../../engine/shapes';
-import { Connection } from '../../engine/types';
+import { Connection, PieceTransform } from '../../engine/types';
 import { MagnetPieceMesh } from '../magnet3d/primitives';
 import { SceneLighting, defaultGLProps } from '../magnet3d/SceneLighting';
 import { EditorProject, SerializableTransform } from '../../editor/types';
@@ -109,6 +109,9 @@ function SceneContent({
   const [hoveredPiece, setHoveredPiece] = useState<string | null>(null);
   const [snapPreview, setSnapPreview] = useState<{ position: [number, number, number]; quaternion: [number, number, number, number] } | null>(null);
   const dragStateRef = useRef<{ pieceId: string; startPos: THREE.Vector3; startQuat: THREE.Quaternion; committed: boolean } | null>(null);
+  // P0-四.7: 跟踪最新 transforms,供防抖 commit 的 setTimeout 回调读取(避免闭包陈旧值)
+  const transformsRef = useRef(transforms);
+  transformsRef.current = transforms;
 
   const selectedPieceId = selection.kind === 'piece' ? selection.id : null;
 
@@ -255,15 +258,67 @@ function SceneContent({
     if (getCurrentViewRef) getCurrentViewRef.current = getCurrentView;
   }, [getCurrentView, getCurrentViewRef]);
 
+  // P1-六: 开发/测试环境下暴露相机状态到 window,供 Playwright E2E 读取
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const updateCameraState = () => {
+      const view = getCurrentView();
+      if (view) {
+        (window as any).__editorCameraState = {
+          x: view.position[0], y: view.position[1], z: view.position[2],
+          zoom: view.zoom,
+          tx: view.target[0], ty: view.target[1], tz: view.target[2],
+        };
+      }
+    };
+    updateCameraState();
+    // 每帧更新(OrbitControls 变化时 camera 属性会同步更新)
+    const interval = setInterval(updateCameraState, 200);
+    return () => clearInterval(interval);
+  }, [getCurrentView]);
+
   /* ---- 键盘快捷键(输入框聚焦时禁用) ---- */
+  // P0-四.7: 长按按键合并为单次历史记录 — 单一防抖 timer
+  // 每次按键重置 350ms timer,停止按键 350ms 后 commit 一次。
+  // 不使用 keyup timer,因为 keyup 的 150ms 在 Playwright/CI 下可能在
+  // 两次按键之间触发,导致一次按键序列被拆成多条历史记录。
+  const KEYBOARD_COMMIT_DEBOUNCE_MS = 350;
+  const keyboardCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keyboardDragStateRef = useRef<{ pieceId: string; startPos: THREE.Vector3; startQuat: THREE.Quaternion; committed: boolean } | null>(null);
+  // 用 ref 跟踪 selection 和回调,避免 transforms 变化导致 useEffect 重新注册
+  // (重新注册会触发 cleanup 清除 commit timer,导致 commit 永远不执行)
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const onMovePieceRef = useRef(onMovePiece);
+  onMovePieceRef.current = onMovePiece;
+  const onMovePieceCommitRef = useRef(onMovePieceCommit);
+  onMovePieceCommitRef.current = onMovePieceCommit;
+
+  // 单一 commit 函数:读取最新 transform 并提交一次历史记录
+  const commitKeyboardDrag = useCallback(() => {
+    const drag = keyboardDragStateRef.current;
+    if (!drag || drag.committed) return;
+    const latestTf = transformsRef.current[drag.pieceId];
+    if (latestTf) {
+      onMovePieceCommitRef.current(drag.pieceId, {
+        position: [latestTf.position.x, latestTf.position.y, latestTf.position.z],
+        quaternion: [latestTf.quaternion.x, latestTf.quaternion.y, latestTf.quaternion.z, latestTf.quaternion.w],
+      });
+    }
+    drag.committed = true;
+    keyboardDragStateRef.current = null;
+    keyboardCommitTimerRef.current = null;
+  }, []);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // 操作对象是输入框/textarea/contenteditable 时禁用全局快捷键
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return;
 
-      if (selection.kind !== 'piece') return;
-      const tf = transforms[selection.id];
+      const sel = selectionRef.current;
+      if (sel.kind !== 'piece') return;
+      const tf = transformsRef.current[sel.id];
       if (!tf) return;
       const step = e.shiftKey ? 1.0 : 0.2;
       const rotStep = e.shiftKey ? 45 : 15;
@@ -288,12 +343,27 @@ function SceneContent({
       }
       if (moved || rotated) {
         e.preventDefault();
-        onMovePiece(selection.id, { position: pos, quaternion: [q.x, q.y, q.z, q.w] });
+        const pieceId = sel.id;
+        // 首次按键时记录起点(用于单次历史)
+        if (!keyboardDragStateRef.current || keyboardDragStateRef.current.pieceId !== pieceId || keyboardDragStateRef.current.committed) {
+          keyboardDragStateRef.current = {
+            pieceId,
+            startPos: tf.position.clone(),
+            startQuat: tf.quaternion.clone(),
+            committed: false,
+          };
+        }
+        onMovePieceRef.current(pieceId, { position: pos, quaternion: [q.x, q.y, q.z, q.w] });
+        // 单一防抖:每次按键重置 timer,350ms 无新按键则 commit
+        if (keyboardCommitTimerRef.current) clearTimeout(keyboardCommitTimerRef.current);
+        keyboardCommitTimerRef.current = setTimeout(commitKeyboardDrag, KEYBOARD_COMMIT_DEBOUNCE_MS);
       }
     };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [selection, transforms, onMovePiece]);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [commitKeyboardDrag]);
 
   /* ---- TransformControls 拖拽事务:单次拖动单次撤销 ---- */
   const onTransformMouseDown = useCallback(() => {
@@ -322,7 +392,13 @@ function SceneContent({
 
     // 磁吸模式:检测吸附候选
     if (toolMode === 'snap') {
-      const candidate = findBestSnapCandidate(selectedPieceId, project);
+      // P0-三.1: 使用 TransformControls 当前实时 position/quaternion 计算磁吸候选,
+      // 而不是上一轮 project.transforms。
+      const liveTf: PieceTransform = {
+        position: obj.position.clone(),
+        quaternion: obj.quaternion.clone(),
+      };
+      const candidate = findBestSnapCandidate(selectedPieceId, project, undefined, liveTf);
       if (candidate) {
         // 检查屏幕像素距离是否满足阈值
         const tf = transforms[selectedPieceId];
@@ -356,7 +432,12 @@ function SceneContent({
 
     // 磁吸模式:如果有吸附预览,提交吸附结果并创建连接
     if (toolMode === 'snap' && snapPreview && selectedPieceId) {
-      const candidate = findBestSnapCandidate(selectedPieceId, project);
+      // P0-三.1: 使用 dummyObj 的实时变换计算候选
+      const obj = transformControlsRef.current?.object;
+      const liveTf: PieceTransform | undefined = obj
+        ? { position: obj.position.clone(), quaternion: obj.quaternion.clone() }
+        : undefined;
+      const candidate = findBestSnapCandidate(selectedPieceId, project, undefined, liveTf);
       if (candidate) {
         // 提交吸附位置
         onMovePieceCommit(selectedPieceId, {
@@ -432,6 +513,11 @@ function SceneContent({
     <>
       <SceneLighting shadowScale={20} shadowOpacity={0.3}>
         <gridHelper args={[20, 20, '#cbd5e1', '#e2e8f0']} position={[0, -0.01, 0]} />
+
+        {/* P0-二.2: TransformControls 附着的 dummyObj 必须真实存在于 scene graph,
+            否则会抛出 "The attached 3D object must be a part of the scene graph"。
+            通过 primitive 挂载到场景,visible=false 避免干扰渲染。 */}
+        <primitive object={dummyObj} visible={false} />
 
         {/* 磁力片 */}
         {project.pieces.map((piece) => {

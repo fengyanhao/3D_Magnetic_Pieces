@@ -19,6 +19,9 @@ import { test, expect } from '@playwright/test';
  *
  * 画布核心逻辑(相机稳定、三轴变换、磁吸、连接选中、撤销事务、曲边渲染)
  * 由 editor-canvas-integration.test.ts 覆盖。
+ *
+ * 真实 WebGL Canvas 交互验收(拖动 Gizmo、吸附、撤销、预览入镜等)
+ * 由 editor-canvas-browser.spec.ts 覆盖。
  */
 
 // 每个测试前清理 localStorage,避免草稿自动恢复导致的状态污染
@@ -30,6 +33,43 @@ test.beforeEach(async ({ page }) => {
 });
 
 test.describe('磁力片方案编辑器', () => {
+  // P0-一: /editor 路由冒烟测试 — 不能只检查 HTTP 200,
+  // 必须验证 WebGL Canvas、零件库和工具栏真实存在
+  test('冒烟: /editor 包含 WebGL Canvas、零件库和工具栏', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') errors.push(msg.text());
+    });
+    page.on('pageerror', (err) => errors.push(err.message));
+
+    await page.goto('/editor');
+    await expect(page.getByText('磁力片方案编辑器')).toBeVisible({ timeout: 10000 });
+
+    // 1. WebGL Canvas 存在且上下文为 webgl/webgl2
+    const canvas = page.locator('canvas').first();
+    await expect(canvas).toBeVisible({ timeout: 10000 });
+    const hasWebGL = await canvas.evaluate((el) => {
+      const c = el as HTMLCanvasElement;
+      const gl = c.getContext('webgl2') || c.getContext('webgl');
+      return !!gl;
+    });
+    expect(hasWebGL).toBeTruthy();
+
+    // 2. 零件库存在
+    await expect(page.getByText('零件库')).toBeVisible();
+
+    // 3. 工具栏存在(新建/导出/校验等按钮)
+    await expect(page.getByRole('button', { name: '新建' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '导出' })).toBeVisible();
+
+    // 页面加载期间不应有致命 console error
+    // (Three.js 的 deprecation warning 不算 error)
+    const criticalErrors = errors.filter(
+      (e) => !e.includes('deprecated') && !e.includes('THREE.WebGLRenderer') && !e.includes('Multiple instances'),
+    );
+    expect(criticalErrors).toHaveLength(0);
+  });
+
   test('进入 /editor 并加载编辑器工作台', async ({ page }) => {
     await page.goto('/editor');
     // 等待懒加载完成

@@ -166,7 +166,7 @@ describe('P1: EditorSmallScreen 小屏提示', () => {
     expect(screen.getByTestId('editor-small-screen')).toBeInTheDocument();
     expect(screen.getByText('请使用电脑编辑')).toBeInTheDocument();
     expect(screen.getByText(/768px/)).toBeInTheDocument();
-    expect(screen.getByText(/1024px/)).toBeInTheDocument();
+    expect(screen.getByText(/1280px/)).toBeInTheDocument();
   });
 
   it('提供返回首页和返回上一页入口', () => {
@@ -184,19 +184,19 @@ describe('P1: EditorSmallScreen 小屏提示', () => {
     backSpy.mockRestore();
   });
 
-  it('展示进度条比例(宽度/1024)', () => {
+  it('展示进度条比例(宽度/1280)', () => {
     const { container } = render(
       <MemoryRouter>
-        <EditorSmallScreen currentWidth={512} />
+        <EditorSmallScreen currentWidth={640} />
       </MemoryRouter>
     );
     const bar = container.querySelector('.bg-gradient-to-r');
     expect(bar).toBeTruthy();
-    // 512/1024 = 50%
+    // 640/1280 = 50%
     expect(bar!.getAttribute('style')).toContain('50%');
   });
 
-  it('当 currentWidth 超过 1024 时进度条不超过 100%', () => {
+  it('当 currentWidth 超过 1280 时进度条不超过 100%', () => {
     const { container } = render(
       <MemoryRouter>
         <EditorSmallScreen currentWidth={2000} />
@@ -237,8 +237,8 @@ describe('P1: useViewportSize hook', () => {
     expect(screen.getByTestId('size').textContent).toBe('500x720');
   });
 
-  it('EDITOR_MIN_DESKTOP_WIDTH = 1024', () => {
-    expect(EDITOR_MIN_DESKTOP_WIDTH).toBe(1024);
+  it('EDITOR_MIN_DESKTOP_WIDTH = 1280', () => {
+    expect(EDITOR_MIN_DESKTOP_WIDTH).toBe(1280);
   });
 });
 

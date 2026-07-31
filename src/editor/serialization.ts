@@ -42,7 +42,7 @@ function snapshotTransforms(
   if (editorTransforms && editorTransforms[root.id]) {
     rootTransform = transformFromSerializable(editorTransforms[root.id]);
   }
-  const res = solveConnections({ pieces, connections, rootPieceId: root.id, getShapeForPiece, rootTransform });
+  const res = solveConnections({ pieces, connections, rootPieceId: root.id, getShapeForPiece, rootTransform, groundLock: false });
   const out: Record<string, SerializableTransform> = {};
   for (const p of pieces) {
     const tf = res.transforms[p.id];
