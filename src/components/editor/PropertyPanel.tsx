@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import * as THREE from 'three';
 import { EditorProject } from '../../editor/types';
 import { EditorValidationResult, categoryLabels, suggestFix, EditorValidationIssue } from '../../editor/validate';
@@ -19,6 +19,9 @@ interface Props {
   onDuplicatePiece: () => void;
   onDeleteSelected: () => void;
   onUpdateConnection: (index: number, patch: { dihedralDeg?: number; flip?: boolean }) => void;
+  // 滑块拖动期间的实时预览（不入栈），释放时一次性提交历史
+  onPreviewConnection: (index: number, patch: { dihedralDeg?: number; flip?: boolean }) => void;
+  onEndPreviewConnection: () => void;
   onRemoveConnection: (index: number) => void;
   onUpdateMetadata: (patch: Partial<EditorProject['metadata']>) => void;
   onFocusError: (target: { pieceId?: string; connectionIndex?: number }) => void;
@@ -371,11 +374,19 @@ function PieceProps(props: Props) {
 }
 
 function ConnectionProps(props: Props) {
-  const { project, selection, onUpdateConnection, onRemoveConnection } = props;
+  const { project, selection, onUpdateConnection, onPreviewConnection, onEndPreviewConnection, onRemoveConnection } = props;
   const idx = (selection as any).index as number;
   const conn = project.connections[idx];
   const dihedralId = useMemo(() => nextFieldId(), []);
   const flipId = useMemo(() => nextFieldId(), []);
+
+  // 本地预览值：拖动滑块时实时显示数值并实时更新3D（不入栈），释放时一次性提交历史
+  const [localDihedral, setLocalDihedral] = useState(conn?.dihedralDeg ?? 0);
+  // 外部变化（undo/redo/预设按钮）时同步 local state
+  useEffect(() => {
+    if (conn) setLocalDihedral(conn.dihedralDeg);
+  }, [conn?.dihedralDeg]);
+
   if (!conn) return <p className="text-xs text-gray-400 p-4">连接不存在</p>;
 
   return (
@@ -385,23 +396,31 @@ function ConnectionProps(props: Props) {
         {conn.pieceA}:{conn.portA} → {conn.pieceB}:{conn.portB}
       </div>
       <div>
-        <label htmlFor={dihedralId} className="text-xs text-gray-500">二面角(deg): {conn.dihedralDeg}</label>
+        <label htmlFor={dihedralId} className="text-xs text-gray-500">二面角(deg): {localDihedral}</label>
         <input
           id={dihedralId}
           type="range"
           min={-180}
           max={180}
           step={5}
-          value={conn.dihedralDeg}
-          onChange={(e) => onUpdateConnection(idx, { dihedralDeg: Number(e.target.value) })}
+          value={localDihedral}
+          onChange={(e) => {
+            const v = Number(e.target.value);
+            setLocalDihedral(v);
+            onPreviewConnection(idx, { dihedralDeg: v });
+          }}
+          onPointerUp={() => onEndPreviewConnection()}
           className="w-full"
-          aria-valuetext={`${conn.dihedralDeg} 度`}
+          aria-valuetext={`${localDihedral} 度`}
         />
         <div className="flex gap-1 mt-1" role="group" aria-label="二面角预设">
           {[0, 45, 90, -90, 135, 180].map((d) => (
             <button
               key={d}
-              onClick={() => onUpdateConnection(idx, { dihedralDeg: d })}
+              onClick={() => {
+                setLocalDihedral(d);
+                onUpdateConnection(idx, { dihedralDeg: d });
+              }}
               aria-pressed={conn.dihedralDeg === d}
               className="text-[10px] px-1 border rounded hover:bg-gray-50"
             >{d}°</button>

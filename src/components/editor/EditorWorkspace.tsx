@@ -16,7 +16,7 @@ import {
   removePieceFromStepAction,
   // P2: 封面生成 action
   setThumbnailDataUrlAction,
-  EditorHistory,
+  EditorHistory, updateCurrent, MAX_HISTORY,
 } from '../../editor/state';
 import { runValidation, EditorValidationResult } from '../../editor/validate';
 import { parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
@@ -270,6 +270,41 @@ export function EditorWorkspace() {
   const handleUpdateConnection = useCallback((index: number, patch: any) => {
     apply((h) => updateConnectionAction(h, index, patch));
   }, [apply]);
+
+  // 滑块拖动预览：实时更新3D但不入栈，释放时一次性提交历史
+  const previewOriginalRef = useRef<EditorProject | null>(null);
+  const handlePreviewConnection = useCallback((index: number, patch: { dihedralDeg?: number; flip?: boolean }) => {
+    setHistory((h) => {
+      // 首次预览时保存原始快照引用（updateCurrent 返回新对象，不会修改旧引用）
+      if (previewOriginalRef.current === null) {
+        previewOriginalRef.current = h.current;
+      }
+      return updateCurrent(h, (p) => {
+        const c = p.connections[index];
+        if (!c) return p;
+        if (patch.dihedralDeg !== undefined) c.dihedralDeg = patch.dihedralDeg;
+        if (patch.flip !== undefined) c.flip = patch.flip;
+        p.transforms = resnapshotTransforms(p);
+        return p;
+      });
+    });
+  }, []);
+
+  const handleEndPreviewConnection = useCallback(() => {
+    setHistory((h) => {
+      const original = previewOriginalRef.current;
+      previewOriginalRef.current = null;
+      if (original && original !== h.current) {
+        // 用原始快照作为历史记录，一次拖动只产生一条 undo
+        return {
+          past: [...h.past, original].slice(-MAX_HISTORY),
+          current: h.current,
+          future: [],
+        };
+      }
+      return h;
+    });
+  }, []);
 
   const handleRemoveConnection = useCallback((index: number) => {
     // P1-七: 录制中断开连接,同步从当前步骤移除
@@ -909,6 +944,8 @@ export function EditorWorkspace() {
               onDuplicatePiece={handleDuplicate}
               onDeleteSelected={handleDeleteSelected}
               onUpdateConnection={handleUpdateConnection}
+              onPreviewConnection={handlePreviewConnection}
+              onEndPreviewConnection={handleEndPreviewConnection}
               onRemoveConnection={handleRemoveConnection}
               onUpdateMetadata={handleUpdateMetadata}
               onFocusError={handleFocusError}

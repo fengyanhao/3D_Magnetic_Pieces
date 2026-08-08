@@ -526,7 +526,9 @@ export function MagnetPieceMesh({
     };
   }, [highlightMat, magnetStripMat, lineSegments2]);
 
-  const useHighlight = selected || highlighted || (isNew && !isAnimatingRef.current && debugFlags.showHighlight);
+  // hover 时不再切换材质（消除转动视角时 highlightMat/centerMat 频繁切换导致的闪烁），
+  // hover 的视觉反馈通过 cursor 变化（EditorCanvas 已设置 cursor:pointer）实现
+  const useHighlight = selected || (isNew && !isAnimatingRef.current && debugFlags.showHighlight);
   const isCenterTransparent = centerMat.transparent;
 
   return (
