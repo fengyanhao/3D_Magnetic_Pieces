@@ -60,6 +60,27 @@ export function getDisplayTransforms(project: EditorProject): Record<string, Pie
   return out;
 }
 
+/**
+ * P0-1: 轻量级显示变换 — 直接读 project.transforms 缓存,不调用 solver。
+ *
+ * 用于拖拽期间的高频调用(findBestSnapCandidate),避免每帧全量求解。
+ * 拖拽期间 project.connections 不变,project.transforms 是上次 commit 后
+ * resnapshotTransforms 的结果,等价于 solver 输出,可安全复用。
+ * 缺失 transform 的零件回退到原点(与 getDisplayTransforms 兜底一致)。
+ */
+function getDisplayTransformsFromCache(project: EditorProject): Record<string, PieceTransform> {
+  const out: Record<string, PieceTransform> = {};
+  for (const p of project.pieces) {
+    const s = project.transforms[p.id];
+    if (s) {
+      out[p.id] = transformFromSerializable(s);
+    } else {
+      out[p.id] = { position: new Vector3(0, 0, 0), quaternion: new Quaternion() };
+    }
+  }
+  return out;
+}
+
 export interface PortRef {
   pieceId: string;
   portId: string;
@@ -171,8 +192,9 @@ export function findBestSnapCandidate(
   const attachShape = getShape(attachPieceId);
   if (!attachShape) return null;
 
-  // P0-三.1: 优先使用 liveAttachTransform,避免使用陈旧的 project.transforms
-  const display = getDisplayTransforms(project);
+  // P0-1: 拖拽热路径 — 直接读 project.transforms 缓存,跳过全量 solver 求解。
+  // 拖拽期间 connections 不变,project.transforms 是上次 commit 的稳定快照。
+  const display = getDisplayTransformsFromCache(project);
   const attachTf = liveAttachTransform ?? display[attachPieceId];
   if (!attachTf) return null;
 

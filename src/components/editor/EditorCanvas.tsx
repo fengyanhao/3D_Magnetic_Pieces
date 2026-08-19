@@ -14,6 +14,13 @@ import type { Selection } from './EditorWorkspace';
 
 export type ToolMode = 'select' | 'move' | 'rotate' | 'snap';
 
+/** P1-4: 相机视图状态(position/target/zoom),用于 EditorWorkspace 同步 currentView */
+export interface EditorView {
+  position: [number, number, number];
+  target: [number, number, number];
+  zoom: number;
+}
+
 interface Props {
   project: EditorProject;
   selection: Selection;
@@ -30,7 +37,9 @@ interface Props {
   /** P0-3: 拖拽期间的实时变换覆盖(只覆盖单个 piece),避免重算 solver */
   liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
   /** P1: 获取当前相机视图(position/target/zoom)的 ref,用于"设为本步镜头" */
-  getCurrentViewRef?: React.MutableRefObject<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>;
+  getCurrentViewRef?: React.MutableRefObject<(() => EditorView | null) | null>;
+  /** P1-4: 相机变化时回调,用于父组件同步 currentView state */
+  onViewChange?: (view: EditorView) => void;
 }
 
 interface DefaultCameraState {
@@ -46,6 +55,7 @@ function SceneContent({
   project, selection, toolMode, onSelectPiece, onSelectConnection, focusRequest, fitRequest,
   onMovePiece, onMovePieceCommit, onCreateConnection, defaultCameraStateRef, resetViewRef,
   fitAllRef, fitSelectionRef, setViewRef, cameraTargetRef, liveTransformOverride, getCurrentViewRef,
+  onViewChange,
 }: {
   project: EditorProject;
   selection: Selection;
@@ -65,7 +75,8 @@ function SceneContent({
   setViewRef: React.MutableRefObject<((view: string) => void) | null>;
   cameraTargetRef: React.MutableRefObject<THREE.Vector3>;
   liveTransformOverride: { pieceId: string; tf: SerializableTransform } | null;
-  getCurrentViewRef?: React.MutableRefObject<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>;
+  getCurrentViewRef?: React.MutableRefObject<(() => EditorView | null) | null>;
+  onViewChange?: (view: EditorView) => void;
 }) {
   const partMap = useMemo(() => {
     const m: Record<string, EditorProject['parts'][number]> = {};
@@ -242,9 +253,7 @@ function SceneContent({
   useEffect(() => { setViewRef.current = setView; }, [setView, setViewRef]);
 
   // P1: 暴露当前相机视图 getter,用于"设为本步镜头"
-  const getCurrentView = useCallback(():
-    | { position: [number, number, number]; target: [number, number, number]; zoom: number }
-    | null => {
+  const getCurrentView = useCallback((): EditorView | null => {
     if (!(camera as THREE.OrthographicCamera).isOrthographicCamera) return null;
     const ortho = camera as THREE.OrthographicCamera;
     const target = controlsRef.current?.target ?? cameraTargetRef.current;
@@ -258,23 +267,51 @@ function SceneContent({
     if (getCurrentViewRef) getCurrentViewRef.current = getCurrentView;
   }, [getCurrentView, getCurrentViewRef]);
 
-  // P1-六: 开发/测试环境下暴露相机状态到 window,供 Playwright E2E 读取
+  // P1-3 + P1-4: 相机变化时通过 OrbitControls 'change' 事件驱动更新,
+  // 替代原来的 200ms setInterval 轮询。同时通知父组件 onViewChange。
+  // controls 可能在 SceneContent mount 后才创建,用 50ms 重试等待可用。
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
-    const updateCameraState = () => {
+    // DEV 模式需要更新 window 状态;父组件可能需要 onViewChange 通知
+    const needDevWindow = import.meta.env.DEV;
+    const needNotify = !!onViewChangeRef.current;
+    if (!needDevWindow && !needNotify) return;
+
+    let disposed = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const handler = () => {
       const view = getCurrentView();
-      if (view) {
+      if (!view) return;
+      if (needDevWindow) {
         (window as any).__editorCameraState = {
           x: view.position[0], y: view.position[1], z: view.position[2],
           zoom: view.zoom,
           tx: view.target[0], ty: view.target[1], tz: view.target[2],
         };
       }
+      onViewChangeRef.current?.(view);
     };
-    updateCameraState();
-    // 每帧更新(OrbitControls 变化时 camera 属性会同步更新)
-    const interval = setInterval(updateCameraState, 200);
-    return () => clearInterval(interval);
+
+    const register = () => {
+      if (disposed) return;
+      const controls = controlsRef.current;
+      if (controls) {
+        controls.addEventListener('change', handler);
+        handler(); // 立即同步一次
+      } else {
+        // controls 尚未创建,50ms 后重试(通常 1-2 次即成功)
+        retryTimer = setTimeout(register, 50);
+      }
+    };
+    register();
+
+    return () => {
+      disposed = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      controlsRef.current?.removeEventListener('change', handler);
+    };
   }, [getCurrentView]);
 
   /* ---- 键盘快捷键(输入框聚焦时禁用) ---- */
@@ -663,7 +700,7 @@ function worldToScreen(worldPos: THREE.Vector3, camera: THREE.Camera, size: { wi
 export function EditorCanvas({
   project, selection, toolMode, onSelectPiece, onSelectConnection, onClearSelection,
   focusRequest, fitRequest, onMovePiece, onMovePieceCommit, onCreateConnection, cameraTargetRef,
-  liveTransformOverride, getCurrentViewRef,
+  liveTransformOverride, getCurrentViewRef, onViewChange,
 }: Props) {
   const defaultCameraStateRef = useRef<DefaultCameraState | null>(null);
   const resetViewRef = useRef<(() => void) | null>(null);
@@ -706,6 +743,7 @@ export function EditorCanvas({
           cameraTargetRef={cameraTargetRef}
           liveTransformOverride={liveTransformOverride}
           getCurrentViewRef={getCurrentViewRef}
+          onViewChange={onViewChange}
         />
       </Canvas>
 

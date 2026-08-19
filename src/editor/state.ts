@@ -7,7 +7,7 @@ import {
   PieceRef, Connection, BuildStepV2,
   StepCamera, PieceEntranceConfig, EasingName, EntranceType,
 } from '../engine/types';
-import { resnapshotTransforms } from './serialization';
+import { resnapshotTransforms, resnapshotTransformsForConnection } from './serialization';
 
 /**
  * 编辑器状态模型 + 撤销/重做。
@@ -82,6 +82,20 @@ export function commit(h: EditorHistory, updater: (p: EditorProject) => EditorPr
   // React Strict Mode 下 updater 会被调用两次:第一次 mutation 会改变 h.current,
   // 第二次 pushHistory 会 clone 已被污染的 h.current → past 条目值错误,撤销无效。
   const current = updater(cloneProject(next.current));
+  return { ...next, current: { ...current, updatedAt: new Date().toISOString() } };
+}
+
+/**
+ * P0-2: 批量提交 — 只 push 一次历史,依次执行多个 updater。
+ * 用于一次用户操作需要多步 mutation 的场景(如断开连接+移动零件+移出步骤),
+ * 避免每个 updater 各 push 一条历史,导致撤销需要按多次。
+ */
+export function commitBatch(h: EditorHistory, updaters: ((p: EditorProject) => EditorProject)[]): EditorHistory {
+  const next = pushHistory(h);
+  let current = cloneProject(next.current);
+  for (const u of updaters) {
+    current = u(current);
+  }
   return { ...next, current: { ...current, updatedAt: new Date().toISOString() } };
 }
 
@@ -244,10 +258,17 @@ export function setPieceTransformAction(
   pieceId: string,
   transform: { position: [number, number, number]; quaternion: [number, number, number, number] },
 ): EditorHistory {
-  return commit(h, (p) => {
-    p.transforms[pieceId] = transform;
-    return p;
-  });
+  return commit(h, (p) => setPieceTransformMutation(p, pieceId, transform));
+}
+
+/** P0-2: setPieceTransform 的纯 mutation,供 commitBatch 组合。 */
+export function setPieceTransformMutation(
+  p: EditorProject,
+  pieceId: string,
+  transform: { position: [number, number, number]; quaternion: [number, number, number, number] },
+): EditorProject {
+  p.transforms[pieceId] = transform;
+  return p;
 }
 
 /**
@@ -273,20 +294,26 @@ export function createConnectionAction(
   h: EditorHistory,
   connection: Connection,
 ): EditorHistory {
-  return commit(h, (p) => {
-    p.connections.push(connection);
-    p.transforms = resnapshotTransforms(p);
-    return p;
-  });
+  return commit(h, (p) => createConnectionMutation(p, connection));
+}
+
+/** P0-2: createConnection 的纯 mutation,供 commitBatch 组合。 */
+export function createConnectionMutation(p: EditorProject, connection: Connection): EditorProject {
+  p.connections.push(connection);
+  p.transforms = resnapshotTransforms(p);
+  return p;
 }
 
 /** 断开连接。 */
 export function removeConnectionAction(h: EditorHistory, index: number): EditorHistory {
-  return commit(h, (p) => {
-    p.connections.splice(index, 1);
-    p.transforms = resnapshotTransforms(p);
-    return p;
-  });
+  return commit(h, (p) => removeConnectionMutation(p, index));
+}
+
+/** P0-2: removeConnection 的纯 mutation,供 commitBatch 组合。 */
+export function removeConnectionMutation(p: EditorProject, index: number): EditorProject {
+  p.connections.splice(index, 1);
+  p.transforms = resnapshotTransforms(p);
+  return p;
 }
 
 /** 更新连接的二面角 / flip。 */
@@ -300,7 +327,8 @@ export function updateConnectionAction(
     if (!c) return p;
     if (patch.dihedralDeg !== undefined) c.dihedralDeg = patch.dihedralDeg;
     if (patch.flip !== undefined) c.flip = patch.flip;
-    p.transforms = resnapshotTransforms(p);
+    // P1-5: 增量求解 — 只重算受影响连接的子树,避免全量 BFS
+    p.transforms = resnapshotTransformsForConnection(p, index);
     return p;
   });
 }
@@ -418,12 +446,15 @@ export function addConnectionToStepAction(
   stepId: number,
   connection: Connection,
 ): EditorHistory {
-  return commit(h, (p) => {
-    const step = p.steps.find((s) => s.id === stepId);
-    if (!step) return p;
-    step.addedConnections.push(connection);
-    return p;
-  });
+  return commit(h, (p) => addConnectionToStepMutation(p, stepId, connection));
+}
+
+/** P0-2: addConnectionToStep 的纯 mutation,供 commitBatch 组合。 */
+export function addConnectionToStepMutation(p: EditorProject, stepId: number, connection: Connection): EditorProject {
+  const step = p.steps.find((s) => s.id === stepId);
+  if (!step) return p;
+  step.addedConnections.push(connection);
+  return p;
 }
 
 /** P1-七: 录制期间断开连接时,把对应连接从步骤的 addedConnections 中移除。 */
@@ -432,16 +463,19 @@ export function removeConnectionFromStepAction(
   stepId: number,
   connection: Connection,
 ): EditorHistory {
-  return commit(h, (p) => {
-    const step = p.steps.find((s) => s.id === stepId);
-    if (!step) return p;
-    step.addedConnections = step.addedConnections.filter(
-      (c) =>
-        !(c.pieceA === connection.pieceA && c.portA === connection.portA &&
-          c.pieceB === connection.pieceB && c.portB === connection.portB),
-    );
-    return p;
-  });
+  return commit(h, (p) => removeConnectionFromStepMutation(p, stepId, connection));
+}
+
+/** P0-2: removeConnectionFromStep 的纯 mutation,供 commitBatch 组合。 */
+export function removeConnectionFromStepMutation(p: EditorProject, stepId: number, connection: Connection): EditorProject {
+  const step = p.steps.find((s) => s.id === stepId);
+  if (!step) return p;
+  step.addedConnections = step.addedConnections.filter(
+    (c) =>
+      !(c.pieceA === connection.pieceA && c.portA === connection.portA &&
+        c.pieceB === connection.pieceB && c.portB === connection.portB),
+  );
+  return p;
 }
 
 /* ----------------- P1: 教学编排字段操作 ----------------- */

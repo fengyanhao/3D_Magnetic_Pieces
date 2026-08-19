@@ -8,7 +8,7 @@ import {
   BuildMode,
   PieceTransform,
 } from '../engine/types';
-import { solveConnections } from '../engine/solver';
+import { solveConnections, computeTransformFromConnection } from '../engine/solver';
 import { getShapeDef, shapeLibrary } from '../engine/shapes';
 import {
   EditorProject,
@@ -390,6 +390,121 @@ export function resnapshotTransforms(project: EditorProject): Record<string, Ser
   const getShape = makeGetShape(project.parts, project.pieces);
   // P0-3: 传入 editor transforms,使求解器从根零件的当前位置开始
   return snapshotTransforms(project.pieces, project.connections, getShape, project.transforms);
+}
+
+/**
+ * P1-5: 增量重算 transforms — 只更新受影响连接的子树。
+ *
+ * 修改连接 changedConnIndex 的 dihedralDeg/flip 后,只有该连接的 attach 零件
+ * 及其下游子树需要重算,base 零件及其上游保持不变。
+ *
+ * 步骤:
+ * 1. 复用现有 project.transforms 作为基础
+ * 2. 从根 BFS(跳过修改的连接)确定 base/attach 方向 — base 可达,attach 不可达
+ * 3. 用修改后的连接参数重算 attach 零件 transform
+ * 4. 从 attach 零件开始 BFS,重算其子树
+ *
+ * 回退: 任何异常(找不到根/形状/transform)时回退到全量 resnapshotTransforms。
+ */
+export function resnapshotTransformsForConnection(
+  project: EditorProject,
+  changedConnIndex: number,
+): Record<string, SerializableTransform> {
+  const conn = project.connections[changedConnIndex];
+  if (!conn) return resnapshotTransforms(project);
+
+  const pieces = project.pieces;
+  if (pieces.length === 0) return {};
+
+  const root = pieces.find((p) => p.isRoot) || pieces[0];
+  const getShape = makeGetShape(project.parts, project.pieces);
+
+  // 构建邻接表
+  const adj: Record<string, { conn: Connection; neighbor: string; connIndex: number }[]> = {};
+  project.connections.forEach((c, idx) => {
+    if (!adj[c.pieceA]) adj[c.pieceA] = [];
+    if (!adj[c.pieceB]) adj[c.pieceB] = [];
+    adj[c.pieceA].push({ conn: c, neighbor: c.pieceB, connIndex: idx });
+    adj[c.pieceB].push({ conn: c, neighbor: c.pieceA, connIndex: idx });
+  });
+
+  // 从根 BFS(跳过修改的连接),标记可达零件 — 可达的是 base 侧
+  const reachable = new Set<string>([root.id]);
+  const reachQueue = [root.id];
+  while (reachQueue.length > 0) {
+    const cur = reachQueue.shift()!;
+    for (const { neighbor, connIndex } of adj[cur] || []) {
+      if (connIndex === changedConnIndex) continue;
+      if (reachable.has(neighbor)) continue;
+      reachable.add(neighbor);
+      reachQueue.push(neighbor);
+    }
+  }
+
+  // 确定方向: 可达的是 base,不可达的是 attach
+  const baseId = reachable.has(conn.pieceA) ? conn.pieceA : conn.pieceB;
+  const attachId = baseId === conn.pieceA ? conn.pieceB : conn.pieceA;
+
+  // 复用现有 transforms(未受影响的部分保持不变)
+  const result: Record<string, SerializableTransform> = { ...project.transforms };
+  const baseSer = result[baseId];
+  if (!baseSer) return resnapshotTransforms(project); // 回退
+
+  const baseShape = getShape(baseId);
+  const attachShape = getShape(attachId);
+  if (!baseShape || !attachShape) return resnapshotTransforms(project);
+
+  const isA = conn.pieceA === baseId;
+  const basePortId = isA ? conn.portA : conn.portB;
+  const attachPortId = isA ? conn.portB : conn.portA;
+
+  // 用修改后的连接参数重算 attach 零件 transform
+  const baseTf = transformFromSerializable(baseSer);
+  const newAttachTf = computeTransformFromConnection(
+    baseTf, baseShape, basePortId, attachShape, attachPortId,
+    conn.dihedralDeg, conn.flip || false,
+  );
+  if (!newAttachTf) return resnapshotTransforms(project);
+
+  result[attachId] = {
+    position: [newAttachTf.position.x, newAttachTf.position.y, newAttachTf.position.z],
+    quaternion: [newAttachTf.quaternion.x, newAttachTf.quaternion.y, newAttachTf.quaternion.z, newAttachTf.quaternion.w],
+  };
+
+  // 从 attach 零件开始 BFS,重算其子树(跳过已处理的修改连接)
+  const bfsQueue = [attachId];
+  const visited = new Set<string>([root.id, attachId]);
+  while (bfsQueue.length > 0) {
+    const cur = bfsQueue.shift()!;
+    const curSer = result[cur];
+    if (!curSer) continue;
+    const curTf = transformFromSerializable(curSer);
+
+    for (const { conn: c, neighbor, connIndex } of adj[cur] || []) {
+      if (connIndex === changedConnIndex) continue; // 已处理
+      if (visited.has(neighbor)) continue;
+      visited.add(neighbor);
+
+      const bShape = getShape(cur);
+      const aShape = getShape(neighbor);
+      if (!bShape || !aShape) continue;
+
+      const isA2 = c.pieceA === cur;
+      const nextTf = computeTransformFromConnection(
+        curTf, bShape, isA2 ? c.portA : c.portB, aShape, isA2 ? c.portB : c.portA,
+        c.dihedralDeg, c.flip || false,
+      );
+      if (!nextTf) continue;
+
+      result[neighbor] = {
+        position: [nextTf.position.x, nextTf.position.y, nextTf.position.z],
+        quaternion: [nextTf.quaternion.x, nextTf.quaternion.y, nextTf.quaternion.z, nextTf.quaternion.w],
+      };
+      bfsQueue.push(neighbor);
+    }
+  }
+
+  return result;
 }
 
 export function transformFromSerializable(s: SerializableTransform): PieceTransform {

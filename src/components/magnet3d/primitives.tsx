@@ -64,6 +64,16 @@ const edgeLineMatCache = new Map<string, LineMaterial>();
 /** P2-5: 边缘磁铁条几何缓存(按 shapeId) */
 const magnetStripGeomCache = new Map<string, THREE.InstancedBufferGeometry>();
 
+/**
+ * P0-4: 边缘磁铁条材质 — 所有磁力片共用同一灰色金属材质,模块级单例。
+ * 避免每个 MagnetPieceMesh 实例都 new 一份(N 个零件 = N 个材质对象)。
+ */
+const magnetStripMatSingleton = new THREE.MeshStandardMaterial({
+  color: new THREE.Color(0.4, 0.4, 0.45),
+  roughness: 0.6,
+  metalness: 0.7,
+});
+
 export function buildShapeFromVertices(vertices: { x: number; y: number }[]): THREE.Shape {
   const s = new THREE.Shape();
   if (vertices.length === 0) return s;
@@ -442,13 +452,8 @@ export function MagnetPieceMesh({
 
   // P2-5: 边缘磁铁条几何
   const magnetStripGeom = useMemo(() => createMagnetStripGeometry(shape), [shape]);
-  const magnetStripMat = useMemo(() => {
-    return new THREE.MeshStandardMaterial({
-      color: new THREE.Color(0.4, 0.4, 0.45),
-      roughness: 0.6,
-      metalness: 0.7,
-    });
-  }, []);
+  // P0-4: magnetStripMat 改用模块级单例,所有零件共享同一材质实例
+  const magnetStripMat = magnetStripMatSingleton;
 
   const groupRef = useRef<THREE.Group>(null);
   const animProgress = useRef(0);
@@ -521,10 +526,10 @@ export function MagnetPieceMesh({
   useEffect(() => {
     return () => {
       highlightMat.dispose();
-      magnetStripMat.dispose();
+      // P0-4: magnetStripMat 是模块级单例,不在组件卸载时 dispose
       lineSegments2.geometry.dispose();
     };
-  }, [highlightMat, magnetStripMat, lineSegments2]);
+  }, [highlightMat, lineSegments2]);
 
   // hover 时不再切换材质（消除转动视角时 highlightMat/centerMat 频繁切换导致的闪烁），
   // hover 的视觉反馈通过 cursor 变化（EditorCanvas 已设置 cursor:pointer）实现
@@ -586,6 +591,8 @@ export function disposeMagnet3DCaches() {
   for (const g of edgeLineGeomCache.values()) g.dispose();
   for (const m of edgeLineMatCache.values()) m.dispose();
   for (const g of magnetStripGeomCache.values()) g.dispose();
+  // P0-4: 释放单例磁铁条材质
+  magnetStripMatSingleton.dispose();
   frameGeomCache.clear();
   centerGeomCache.clear();
   frameMatCache.clear();

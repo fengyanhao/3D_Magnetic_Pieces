@@ -5,10 +5,10 @@ import {
   createInitialHistory, replaceProject, createEmptyProject,
   undo, redo, canUndo, canRedo,
   addPieceAction, deletePieceAction, duplicatePieceAction, setPieceColorAction,
-  setPieceTransformAction, createConnectionAction, removeConnectionAction,
+  setPieceTransformAction, removeConnectionAction,
   updateConnectionAction, addStepAction, deleteStepAction, moveStepAction,
-  updateStepAction, addPieceToStepAction, addConnectionToStepAction,
-  removeConnectionFromStepAction, saveCameraPresetAction, updateMetadataAction,
+  updateStepAction, addPieceToStepAction,
+  saveCameraPresetAction, updateMetadataAction,
   // P1: 教学编排 actions
   setStepCameraAction, captureCurrentViewAsStepCameraAction,
   setPieceEntranceAction, batchSetEntranceTypeAction, patchPieceEntranceAction,
@@ -17,23 +17,28 @@ import {
   // P2: 封面生成 action
   setThumbnailDataUrlAction,
   EditorHistory, updateCurrent, MAX_HISTORY,
+  // P0-2: 批量提交 + 纯 mutation 函数
+  commitBatch,
+  setPieceTransformMutation, createConnectionMutation, removeConnectionMutation,
+  addConnectionToStepMutation, removeConnectionFromStepMutation,
 } from '../../editor/state';
 import { runValidation, EditorValidationResult } from '../../editor/validate';
 import { parseProject, integrityCheck, projectToModel } from '../../editor/serialization';
 import { modelToProject } from '../../editor/serialization';
-import { resnapshotTransforms } from '../../editor/serialization';
+import { resnapshotTransforms, resnapshotTransformsForConnection } from '../../editor/serialization';
+import { EditorView } from './EditorCanvas';
 import {
   serializeProjectAsScheme,
   parseScheme,
   schemeToEditorProject,
 } from '../../engine/scheme';
-import { EditorProject, SerializableTransform } from '../../editor/types';
+import { EditorProject, SerializableTransform, EditorMetadata, CameraPreset } from '../../editor/types';
 import { findConnectionToParent, computeDihedralFromMovedTransform } from '../../editor/snap';
 import {
-  PieceTransform, StepCamera, PieceEntranceConfig, EntranceType, Connection,
+  PieceTransform, StepCamera, PieceEntranceConfig, EntranceType, Connection, BuildStepV2,
 } from '../../engine/types';
 import { models } from '../../data/models';
-import { Model } from '../../data/types';
+import { Model, MagnetShape, MagnetColor } from '../../data/types';
 import { TutorialPlayer } from '../tutorial/TutorialPlayer';
 import { EditorToolbar } from './EditorToolbar';
 import { PartLibrary } from './PartLibrary';
@@ -89,12 +94,31 @@ export function EditorWorkspace() {
   } | null>(null);
   // P1-七: 停止录制确认弹窗
   const [showStopRecordingConfirm, setShowStopRecordingConfirm] = useState(false);
+  // P1-2: 通用确认弹窗(替代原生 confirm)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    confirmLabel?: string;
+    danger?: boolean;
+  } | null>(null);
+  // P1-2: 通用文本输入弹窗(替代原生 prompt)
+  const [promptDialog, setPromptDialog] = useState<{
+    title: string;
+    message?: string;
+    defaultValue: string;
+    onSubmit: (value: string) => void;
+  } | null>(null);
+  const [promptValue, setPromptValue] = useState('');
 
   const project = history.current;
   const draft = useDraftStore();
   const cameraTargetRef = useRef(new THREE.Vector3(0, 0, 0));
-  // P1: 获取 EditorCanvas 当前相机视图(用于"设为本步镜头")
-  const getCurrentViewRef = useRef<(() => { position: [number, number, number]; target: [number, number, number]; zoom: number } | null) | null>(null);
+  // P1: 获取 EditorCanvas 当前相机视图(用于"设为本步镜头"命令式调用)
+  const getCurrentViewRef = useRef<(() => EditorView | null) | null>(null);
+  // P1-4: currentView 改为 state,由 EditorCanvas 的 onViewChange 回调驱动,
+  // 替代原来 useMemo + getCurrentViewRef.current 的方式(后者读 ref 取不到最新值)
+  const [currentView, setCurrentView] = useState<EditorView | null>(null);
   // P1: 小屏检测
   const viewport = useViewportSize();
   const isDesktop = viewport.width >= EDITOR_MIN_DESKTOP_WIDTH;
@@ -156,7 +180,7 @@ export function EditorWorkspace() {
     setLiveTransformOverride({ pieceId, tf });
   }, []);
 
-  const handleAddPiece = useCallback((shape: any, color: any) => {
+  const handleAddPiece = useCallback((shape: MagnetShape, color: MagnetColor) => {
     // P0-四: 新零件放到视野中心构建平面,按已有零件数量在右方向错开,避免全部重叠
     const target = cameraTargetRef.current;
     const offsetIndex = project.pieces.length; // 第 N 个零件偏移 N 个单位
@@ -200,7 +224,7 @@ export function EditorWorkspace() {
     setFocusRequest({ pieceId: newId, ts: Date.now() });
   }, [selection, history]);
 
-  const handleSetPieceColor = useCallback((pieceId: string, color: any) => {
+  const handleSetPieceColor = useCallback((pieceId: string, color: MagnetColor) => {
     apply((h) => setPieceColorAction(h, pieceId, color));
   }, [apply]);
 
@@ -241,15 +265,17 @@ export function EditorWorkspace() {
     const pending = pendingConnectedMove;
     if (!pending) return;
     const { pieceId, tf, parentConn } = pending;
-    // P1-七: 录制中断开连接也同步移出当前步骤
-    if (recordingStepId !== null) {
-      apply((h) => removeConnectionFromStepAction(h, recordingStepId, parentConn.connection));
-    }
-    apply((h) => removeConnectionAction(h, parentConn.index));
-    apply((h) => setPieceTransformAction(h, pieceId, tf));
+    // P0-2: 用 commitBatch 合并 2-3 个 mutation 为单条历史记录
+    setHistory((h) => commitBatch(h, [
+      (p) => recordingStepId !== null
+        ? removeConnectionFromStepMutation(p, recordingStepId, parentConn.connection)
+        : p,
+      (p) => removeConnectionMutation(p, parentConn.index),
+      (p) => setPieceTransformMutation(p, pieceId, tf),
+    ]));
     setMessage({ text: '已断开连接并移动零件', type: 'info' });
     setPendingConnectedMove(null);
-  }, [pendingConnectedMove, recordingStepId, apply]);
+  }, [pendingConnectedMove, recordingStepId]);
 
   // P1-五: 三选项弹窗 - 取消(完全不改变项目)
   const handleConnectedMoveCancel = useCallback(() => {
@@ -257,17 +283,22 @@ export function EditorWorkspace() {
     setMessage({ text: '已取消移动', type: 'info' });
   }, []);
 
-  const handleCreateConnection = useCallback((conn: any) => {
-    apply((h) => createConnectionAction(h, conn));
-    // P1-七: 录制模式下,新连接通过原子 action 自动归入当前录制步骤
+  const handleCreateConnection = useCallback((conn: Connection) => {
+    // P0-2: 用 commitBatch 合并创建连接+加入步骤为单条历史记录
     const targetStepId = recordingStepId ?? currentStepId;
+    const updaters: ((p: EditorProject) => EditorProject)[] = [
+      (p) => createConnectionMutation(p, conn),
+    ];
     if (targetStepId !== null) {
-      apply((h) => addConnectionToStepAction(h, targetStepId, conn));
+      updaters.push((p) => addConnectionToStepMutation(p, targetStepId, conn));
+    }
+    setHistory((h) => commitBatch(h, updaters));
+    if (targetStepId !== null) {
       setMessage({ text: '已创建连接并加入当前步骤', type: 'success' });
     }
-  }, [apply, currentStepId, recordingStepId]);
+  }, [currentStepId, recordingStepId]);
 
-  const handleUpdateConnection = useCallback((index: number, patch: any) => {
+  const handleUpdateConnection = useCallback((index: number, patch: Partial<Connection>) => {
     apply((h) => updateConnectionAction(h, index, patch));
   }, [apply]);
 
@@ -284,7 +315,8 @@ export function EditorWorkspace() {
         if (!c) return p;
         if (patch.dihedralDeg !== undefined) c.dihedralDeg = patch.dihedralDeg;
         if (patch.flip !== undefined) c.flip = patch.flip;
-        p.transforms = resnapshotTransforms(p);
+        // P1-5: 增量求解 — 只重算受影响连接的子树,避免滑块拖动时每帧全量 BFS
+        p.transforms = resnapshotTransformsForConnection(p, index);
         return p;
       });
     });
@@ -309,11 +341,14 @@ export function EditorWorkspace() {
   const handleRemoveConnection = useCallback((index: number) => {
     // P1-七: 录制中断开连接,同步从当前步骤移除
     const conn = project.connections[index];
-    if (recordingStepId !== null && conn) {
-      apply((h) => removeConnectionFromStepAction(h, recordingStepId, conn));
-    }
-    apply((h) => removeConnectionAction(h, index));
-  }, [apply, project.connections, recordingStepId]);
+    // P0-2: 用 commitBatch 合并移除连接+移出步骤为单条历史记录
+    setHistory((h) => commitBatch(h, [
+      (p) => (recordingStepId !== null && conn)
+        ? removeConnectionFromStepMutation(p, recordingStepId, conn)
+        : p,
+      (p) => removeConnectionMutation(p, index),
+    ]));
+  }, [project.connections, recordingStepId]);
 
   const handleAddStep = useCallback(() => {
     const { history: h, stepId } = addStepAction(history);
@@ -331,7 +366,7 @@ export function EditorWorkspace() {
     apply((h) => moveStepAction(h, from, to));
   }, [apply]);
 
-  const handleUpdateStep = useCallback((stepId: number, patch: any) => {
+  const handleUpdateStep = useCallback((stepId: number, patch: Partial<BuildStepV2>) => {
     apply((h) => updateStepAction(h, stepId, patch));
   }, [apply]);
 
@@ -339,7 +374,7 @@ export function EditorWorkspace() {
     apply((h) => addPieceToStepAction(h, stepId, pieceId));
   }, [apply]);
 
-  const handleSaveCameraPreset = useCallback((preset: any) => {
+  const handleSaveCameraPreset = useCallback((preset: Omit<CameraPreset, 'id'>) => {
     apply((h) => saveCameraPresetAction(h, preset).history);
     setMessage({ text: '已保存镜头预设', type: 'success' });
   }, [apply]);
@@ -431,12 +466,7 @@ export function EditorWorkspace() {
     setMode(newMode);
   }, []);
 
-  // P1: 当前编辑器视图(供 TutorialOrchestrationPanel 显示)
-  const currentView = useMemo(() => {
-    return getCurrentViewRef.current?.() ?? null;
-  }, [project, mode]); // 依赖 project/mode 触发重新计算
-
-  const handleUpdateMetadata = useCallback((patch: any) => {
+  const handleUpdateMetadata = useCallback((patch: Partial<EditorMetadata>) => {
     apply((h) => updateMetadataAction(h, patch));
   }, [apply]);
 
@@ -459,28 +489,46 @@ export function EditorWorkspace() {
 
   // 另存为:用新名称和新 id 保存当前项目副本
   const handleSaveAs = useCallback(() => {
-    const name = prompt('请输入新方案名称:', `${project.metadata.name} 副本`);
-    if (!name?.trim()) return;
-    // P0-4: structuredClone 比 JSON 往返快,且语义清晰
-    const cloned = typeof structuredClone === 'function' ? structuredClone(project) : JSON.parse(JSON.stringify(project));
-    const newProject: EditorProject = {
-      ...cloned,
-      id: `proj-${Date.now()}`,
-      metadata: { ...project.metadata, name: name.trim() },
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    draft.save(newProject.id, newProject);
-    setDraftVersion((v) => v + 1);
-    setMessage({ text: `已另存为草稿: ${name.trim()}`, type: 'success' });
+    // P1-2: 用自定义弹窗替代原生 prompt
+    setPromptValue(`${project.metadata.name} 副本`);
+    setPromptDialog({
+      title: '另存为新方案',
+      message: '请输入新方案名称:',
+      defaultValue: `${project.metadata.name} 副本`,
+      onSubmit: (name) => {
+        if (!name.trim()) return;
+        // P0-4: structuredClone 比 JSON 往返快,且语义清晰
+        const cloned = typeof structuredClone === 'function' ? structuredClone(project) : JSON.parse(JSON.stringify(project));
+        const newProject: EditorProject = {
+          ...cloned,
+          id: `proj-${Date.now()}`,
+          metadata: { ...project.metadata, name: name.trim() },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        draft.save(newProject.id, newProject);
+        setDraftVersion((v) => v + 1);
+        setMessage({ text: `已另存为草稿: ${name.trim()}`, type: 'success' });
+        setPromptDialog(null);
+      },
+    });
   }, [draft, project]);
 
   // 删除草稿
   const handleDeleteDraft = useCallback((key: string, name: string) => {
-    if (!confirm(`确定删除草稿"${name}"?此操作不可撤销。`)) return;
-    draft.remove(key);
-    setDraftVersion((v) => v + 1);
-    setMessage({ text: `已删除草稿: ${name}`, type: 'info' });
+    // P1-2: 用自定义弹窗替代原生 confirm
+    setConfirmDialog({
+      title: '删除草稿',
+      message: `确定删除草稿"${name}"?此操作不可撤销。`,
+      confirmLabel: '删除',
+      danger: true,
+      onConfirm: () => {
+        draft.remove(key);
+        setDraftVersion((v) => v + 1);
+        setMessage({ text: `已删除草稿: ${name}`, type: 'info' });
+        setConfirmDialog(null);
+      },
+    });
   }, [draft]);
 
   // 草稿列表(响应 draftVersion 变化刷新)
@@ -488,16 +536,24 @@ export function EditorWorkspace() {
 
   /* ----------------- 工具栏操作 ----------------- */
   const handleNew = useCallback(async () => {
-    if (!confirm('新建方案会清空当前编辑内容(当前草稿已自动保存)。继续?')) return;
-    // 先保存当前项目快照(确保不丢失)
-    await draft.save(project.id, project);
-    const newProject = createEmptyProject();
-    setHistory(replaceProject(history, newProject));
-    setSelection({ kind: 'none' });
-    setCurrentStepId(null);
-    setValidation(null);
-    setFitRequest({ ts: Date.now() });
-    setMessage({ text: '已新建方案,草稿已保存为独立条目', type: 'info' });
+    // P1-2: 用自定义弹窗替代原生 confirm
+    setConfirmDialog({
+      title: '新建方案',
+      message: '新建方案会清空当前编辑内容(当前草稿已自动保存)。继续?',
+      confirmLabel: '新建',
+      onConfirm: async () => {
+        // 先保存当前项目快照(确保不丢失)
+        await draft.save(project.id, project);
+        const newProject = createEmptyProject();
+        setHistory(replaceProject(history, newProject));
+        setSelection({ kind: 'none' });
+        setCurrentStepId(null);
+        setValidation(null);
+        setFitRequest({ ts: Date.now() });
+        setMessage({ text: '已新建方案,草稿已保存为独立条目', type: 'info' });
+        setConfirmDialog(null);
+      },
+    });
   }, [history, project, draft]);
 
   const handleUndo = useCallback(() => setHistory((h) => undo(h)), []);
@@ -541,19 +597,33 @@ export function EditorWorkspace() {
       setMessage({ text: `数据完整性检查未通过(${errors.length} 个错误),已阻止导出。请查看右侧校验面板。`, type: 'error' });
       return;
     }
+    // P1-2: 导出逻辑抽为内部函数,供确认弹窗回调复用
+    const doExport = () => {
+      // P0-3: 导出为 SchemeDef v3 JSON（唯一持久化格式）
+      const json = serializeProjectAsScheme(project);
+      const blob = new Blob([json], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${project.metadata.name || 'magnet-project'}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      setMessage({ text: '已导出 JSON (SchemeDef v3)', type: 'success' });
+    };
     if (validation && !validation.valid) {
-      if (!confirm('方案未通过物理校验,仅可作为草稿导出。继续?')) return;
+      // P1-2: 用自定义弹窗替代原生 confirm
+      setConfirmDialog({
+        title: '导出确认',
+        message: '方案未通过物理校验,仅可作为草稿导出。继续?',
+        confirmLabel: '继续导出',
+        onConfirm: () => {
+          doExport();
+          setConfirmDialog(null);
+        },
+      });
+    } else {
+      doExport();
     }
-    // P0-3: 导出为 SchemeDef v3 JSON（唯一持久化格式）
-    const json = serializeProjectAsScheme(project);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${project.metadata.name || 'magnet-project'}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    setMessage({ text: '已导出 JSON (SchemeDef v3)', type: 'success' });
   }, [project, validation]);
 
   const handleImportFile = useCallback(async (file: File) => {
@@ -891,6 +961,86 @@ export function EditorWorkspace() {
         </div>
       )}
 
+      {/* P1-2: 通用确认弹窗(替代原生 confirm) */}
+      {confirmDialog && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          data-testid="confirm-dialog"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">{confirmDialog.title}</h3>
+            <p className="text-sm text-gray-600 mb-5">{confirmDialog.message}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={confirmDialog.onConfirm}
+                className={`flex-1 px-4 py-2.5 text-white rounded-lg font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 ${
+                  confirmDialog.danger
+                    ? 'bg-red-500 hover:bg-red-600 focus-visible:ring-red-300'
+                    : 'bg-blue-500 hover:bg-blue-600 focus-visible:ring-blue-300'
+                }`}
+                data-testid="confirm-dialog-ok"
+              >
+                {confirmDialog.confirmLabel ?? '确定'}
+              </button>
+              <button
+                onClick={() => setConfirmDialog(null)}
+                className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                data-testid="confirm-dialog-cancel"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* P1-2: 通用文本输入弹窗(替代原生 prompt) */}
+      {promptDialog && (
+        <div
+          className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          data-testid="prompt-dialog"
+        >
+          <div className="bg-white rounded-2xl shadow-xl max-w-md w-full p-6">
+            <h3 className="text-lg font-semibold text-gray-800 mb-2">{promptDialog.title}</h3>
+            {promptDialog.message && (
+              <p className="text-sm text-gray-600 mb-3">{promptDialog.message}</p>
+            )}
+            <input
+              type="text"
+              value={promptValue}
+              onChange={(e) => setPromptValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') promptDialog.onSubmit(promptValue);
+                if (e.key === 'Escape') setPromptDialog(null);
+              }}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 mb-5"
+              autoFocus
+              data-testid="prompt-dialog-input"
+            />
+            <div className="flex gap-3">
+              <button
+                onClick={() => promptDialog.onSubmit(promptValue)}
+                className="flex-1 px-4 py-2.5 bg-blue-500 text-white rounded-lg font-medium hover:bg-blue-600 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2"
+                data-testid="prompt-dialog-ok"
+              >
+                确定
+              </button>
+              <button
+                onClick={() => setPromptDialog(null)}
+                className="flex-1 px-4 py-2.5 bg-gray-100 text-gray-700 rounded-lg font-medium hover:bg-gray-200 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-gray-400 focus-visible:ring-offset-2"
+                data-testid="prompt-dialog-cancel"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {message && (
         <div
           className={`px-4 py-2 text-sm border-b ${
@@ -931,6 +1081,7 @@ export function EditorWorkspace() {
               cameraTargetRef={cameraTargetRef}
               liveTransformOverride={liveTransformOverride}
               getCurrentViewRef={getCurrentViewRef}
+              onViewChange={setCurrentView}
             />
           </main>
 

@@ -24,6 +24,21 @@ export interface SolverContext {
 
 const Q_GROUND = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI / 2);
 
+// P1-6: 模块级可复用临时对象,避免 solveConnections BFS 热路径中每帧 new 大量对象。
+// JavaScript 单线程,函数执行期间不会被并发调用,可安全复用。
+// 注意:返回给调用方的 PieceTransform.position/quaternion 必须是 new 的新对象。
+const _tmpScale = new Vector3(1, 1, 1);
+const _tmpM = new Matrix4();
+const _v0 = new Vector3();
+const _v1 = new Vector3();
+const _v2 = new Vector3();
+const _v3 = new Vector3();
+const _v4 = new Vector3();
+const _v5 = new Vector3();
+const _q0 = new Quaternion();
+const _q1 = new Quaternion();
+const _q2 = new Quaternion();
+
 export function solveConnections(ctx: SolverContext): SolverResult {
   const { pieces, connections, rootPieceId, getShapeForPiece, rootTransform, groundLock = true } = ctx;
 
@@ -162,39 +177,50 @@ export function computeTransformFromConnection(
   if (!basePort) return null;
   if (!attachPort) return null;
 
-  const baseMatrix = new Matrix4().compose(baseTf.position, baseTf.quaternion, new Vector3(1, 1, 1));
-  const baseP0 = new Vector3(basePort.p0.x, basePort.p0.y, 0).applyMatrix4(baseMatrix);
-  const baseP1 = new Vector3(basePort.p1.x, basePort.p1.y, 0).applyMatrix4(baseMatrix);
-  const baseDir = new Vector3().subVectors(baseP1, baseP0).normalize();
+  // P1-6: 复用模块级临时对象,避免 BFS 热路径中每帧 new 10+ 个对象
+  // 变量分配(确保使用期间不被覆盖):
+  //   _v0=baseP0(全程活跃)  _v1=baseP1→baseNormal→rotatedAttachP0
+  //   _v2=baseDir(到 L211)  _v3=attachP0→sinAngleCross  _v4=attachP1→attachNormal
+  //   _v5=attachDir→attachNormalAfterDir
+  //   _q0=qDir→qDihedral  _q1=qOrtho  _q2=qCoplanar
+  _tmpM.compose(baseTf.position, baseTf.quaternion, _tmpScale);
+  const baseP0 = _v0.set(basePort.p0.x, basePort.p0.y, 0).applyMatrix4(_tmpM);
+  const baseP1 = _v1.set(basePort.p1.x, basePort.p1.y, 0).applyMatrix4(_tmpM);
+  const baseDir = _v2.subVectors(baseP1, baseP0).normalize();
 
-  let attachP0 = new Vector3(attachPort.p0.x, attachPort.p0.y, 0);
-  let attachP1 = new Vector3(attachPort.p1.x, attachPort.p1.y, 0);
-  if (flip) {
-    const tmp = attachP0.clone();
-    attachP0 = attachP1.clone();
-    attachP1 = tmp;
-  }
-  const attachDir = new Vector3().subVectors(attachP1, attachP0).normalize();
+  // flip 时交换 attachP0/attachP1
+  const aP0x = flip ? attachPort.p1.x : attachPort.p0.x;
+  const aP0y = flip ? attachPort.p1.y : attachPort.p0.y;
+  const aP1x = flip ? attachPort.p0.x : attachPort.p1.x;
+  const aP1y = flip ? attachPort.p0.y : attachPort.p1.y;
+  const attachP0 = _v3.set(aP0x, aP0y, 0);
+  const attachP1 = _v4.set(aP1x, aP1y, 0);
+  const attachDir = _v5.subVectors(attachP1, attachP0).normalize();
 
-  const baseNormal = new Vector3(0, 0, 1).applyQuaternion(baseTf.quaternion).normalize();
-  const attachNormal = new Vector3(0, 0, 1);
+  const baseNormal = _v1.set(0, 0, 1).applyQuaternion(baseTf.quaternion).normalize();
+  // attachNormal 复用 _v4(attachP1 已不再需要)
+  const attachNormal = _v4.set(0, 0, 1);
 
-  const qDir = new Quaternion().setFromUnitVectors(attachDir, baseDir);
-
-  const attachNormalAfterDir = attachNormal.clone().applyQuaternion(qDir);
+  const qDir = _q0.setFromUnitVectors(attachDir, baseDir);
+  // attachNormalAfterDir 复用 _v5(attachDir 已不再需要)
+  const attachNormalAfterDir = _v5.copy(attachNormal).applyQuaternion(qDir);
   const cosAngle = attachNormalAfterDir.dot(baseNormal);
-  const sinAngle = new Vector3().crossVectors(attachNormalAfterDir, baseNormal).dot(baseDir);
+  // sinAngle 的 cross 复用 _v3(attachP0 原始值已保存在 aP0x/aP0y)
+  const sinAngle = _v3.crossVectors(attachNormalAfterDir, baseNormal).dot(baseDir);
   const angle = Math.atan2(sinAngle, cosAngle);
-  const qOrtho = new Quaternion().setFromAxisAngle(baseDir, angle);
+  const qOrtho = _q1.setFromAxisAngle(baseDir, angle);
 
-  const qCoplanar = new Quaternion().multiplyQuaternions(qOrtho, qDir);
+  const qCoplanar = _q2.multiplyQuaternions(qOrtho, qDir);
 
   const dihedralRad = (dihedralDeg * Math.PI) / 180;
-  const qDihedral = new Quaternion().setFromAxisAngle(baseDir, dihedralRad);
+  // qDihedral 复用 _q0(qDir 在 qCoplanar 计算后已不再需要)
+  const qDihedral = _q0.setFromAxisAngle(baseDir, dihedralRad);
 
+  // 返回值必须 new 新对象,不能复用临时变量(调用方会持有引用)
   const finalQuaternion = new Quaternion().multiplyQuaternions(qDihedral, qCoplanar);
 
-  const rotatedAttachP0 = attachP0.clone().applyQuaternion(finalQuaternion);
+  // rotatedAttachP0 复用 _v1(baseNormal 已不再需要)
+  const rotatedAttachP0 = _v1.set(aP0x, aP0y, 0).applyQuaternion(finalQuaternion);
   const finalPosition = new Vector3().subVectors(baseP0, rotatedAttachP0);
 
   return { position: finalPosition, quaternion: finalQuaternion };
