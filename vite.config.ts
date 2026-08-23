@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { sites } from '@openai/sites-vite-plugin'
 import path from 'path'
 
 export default defineConfig({
   plugins: [
+    sites(),
     react(),
     {
       name: 'kill-stale-service-worker',
@@ -58,10 +60,28 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // P1-11: 细化 manualChunks 分组,减小首屏 chunk 体积
-        manualChunks: {
-          'three': ['three', '@react-three/fiber', '@react-three/drei'],
-          'react': ['react', 'react-dom', 'react-router-dom'],
-          'icons': ['lucide-react'],
+        manualChunks(id) {
+          const moduleId = id.replaceAll('\\', '/')
+          if (!moduleId.includes('/node_modules/')) return undefined
+
+          if (
+            moduleId.includes('/node_modules/three/') ||
+            moduleId.includes('/node_modules/@react-three/fiber/') ||
+            moduleId.includes('/node_modules/@react-three/drei/')
+          ) {
+            return 'three'
+          }
+          if (
+            moduleId.includes('/node_modules/react/') ||
+            moduleId.includes('/node_modules/react-dom/') ||
+            moduleId.includes('/node_modules/react-router-dom/')
+          ) {
+            return 'react'
+          }
+          if (moduleId.includes('/node_modules/lucide-react/')) {
+            return 'icons'
+          }
+          return undefined
         },
       },
     },
