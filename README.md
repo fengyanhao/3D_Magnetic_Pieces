@@ -1,11 +1,44 @@
-# 亲子磁力片
+<div align="center">
 
-一个专为3-6岁儿童和家长设计的磁力片分步搭建教程网站。普通用户端为响应式网站，桌面端和移动端均提供优化体验；编辑器为电脑端专业网页工具。
+# 3D Magnetic Pieces
+
+*An open-source interactive 3D magnetic-tile building and learning platform for children and parents.*
+
+[Live Demo](https://parent-child-magnetic-pieces.fun-bell-4118.chatgpt.site) · [中文 README](#中文说明) · [Latest Release](https://github.com/fengyanhao/3D_Magnetic_Pieces/releases/latest) · [Contributing](CONTRIBUTING.md) · [MIT License](LICENSE)
+
+</div>
+
+![3D Magnetic Pieces homepage](./src/test/e2e/visual-audit.spec.ts-snapshots/%E9%A6%96%E9%A1%B5-Desktop-1440-win32.png)
+
+## Overview
+
+3D Magnetic Pieces combines guided magnetic-tile tutorials with a browser-based 3D editor and a deterministic geometry engine. Families can explore models step by step, while contributors can extend the model catalog, connection rules, validation logic, and learning experience.
+
+- Step-by-step 3D tutorials across multiple themes and difficulty levels
+- Desktop 3D editor with geometry, connection, serialization, and validation tools
+- Physical and semantic checks for pieces, connections, construction steps, and model integrity
+- Responsive learning UI for desktop, tablet, and mobile devices
+- Unit and Playwright E2E test suites covering models, routes, rendering, and editor workflows
+
+## Quick Start
+
+```bash
+npm install
+npm run dev
+```
+
+Open <http://localhost:5174/>. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development and pull-request workflow.
+
+<a id="中文说明"></a>
+
+## 中文说明
+
+**亲子磁力片**是一个专为 3–6 岁儿童和家长设计的磁力片分步搭建教程网站。普通用户端为响应式网站，桌面端和移动端均提供优化体验；编辑器为电脑端专业网页工具。
 
 ## 技术栈
 
 - **框架**: React 18 + TypeScript
-- **构建工具**: Vite 7
+- **构建工具**: Vite 8
 - **样式**: Tailwind CSS 3
 - **图标**: Lucide React
 - **路由**: React Router DOM 6

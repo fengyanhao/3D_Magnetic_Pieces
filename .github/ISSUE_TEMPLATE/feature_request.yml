@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose a concrete improvement for learners, parents, contributors, or maintainers.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user need and desired outcome. Roadmap ideas should become issues only when someone intends to investigate or implement them.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or user need
+      description: Who needs this and what are they unable to do today?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable behavior rather than only an implementation choice.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed approach
+      description: Optional implementation, UI, data-model, or API ideas.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing workarounds or other approaches you considered.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Tutorials and model catalog
+        - 3D editor
+        - Geometry and connection engine
+        - Physical or semantic validation
+        - Responsive UI and accessibility
+        - Testing and developer experience
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and roadmap items for duplicates.
+          required: true
+        - label: This request describes a genuine user or maintainer need.
+          required: true

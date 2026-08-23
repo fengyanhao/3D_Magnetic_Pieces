@@ -2,6 +2,15 @@
   "name": "3d-magnetic-blocks-tutorial",
   "version": "2.2.0",
   "private": true,
+  "license": "MIT",
+  "homepage": "https://parent-child-magnetic-pieces.fun-bell-4118.chatgpt.site",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fengyanhao/3D_Magnetic_Pieces.git"
+  },
+  "bugs": {
+    "url": "https://github.com/fengyanhao/3D_Magnetic_Pieces/issues"
+  },
   "type": "module",
   "scripts": {
     "start-site": "vite --host 0.0.0.0 --port 5174 --strictPort",
