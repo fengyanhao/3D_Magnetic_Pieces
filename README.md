@@ -4,11 +4,15 @@
 
 *An open-source interactive 3D magnetic-tile building and learning platform for children and parents.*
 
-[Live Demo](https://parent-child-magnetic-pieces.fun-bell-4118.chatgpt.site) · [中文 README](#中文说明) · [Latest Release](https://github.com/fengyanhao/3D_Magnetic_Pieces/releases/latest) · [Contributing](CONTRIBUTING.md) · [MIT License](LICENSE)
+*一个面向儿童与家长的开源交互式 3D 磁力片搭建与学习平台。*
+
+[Live Demo](https://parent-child-magnetic-pieces.fun-bell-4118.chatgpt.site) · [English](#english) · [中文](#中文说明) · [Latest Release](https://github.com/fengyanhao/3D_Magnetic_Pieces/releases/latest) · [Contributing](CONTRIBUTING.md) · [MIT License](LICENSE)
 
 </div>
 
 ![3D Magnetic Pieces homepage](./src/test/e2e/visual-audit.spec.ts-snapshots/%E9%A6%96%E9%A1%B5-Desktop-1440-win32.png)
+
+<a id="english"></a>
 
 ## Overview
 
@@ -20,14 +24,190 @@
 - Responsive learning UI for desktop, tablet, and mobile devices
 - Unit and Playwright E2E test suites covering models, routes, rendering, and editor workflows
 
-## Quick Start
+## Tech Stack
+
+- **Framework:** React 18 + TypeScript
+- **Build tool:** Vite 8
+- **Styling:** Tailwind CSS 3
+- **Icons:** Lucide React
+- **Routing:** React Router DOM 6
+- **3D engine:** Three.js + `@react-three/fiber` + `@react-three/drei`
+- **Testing:** Vitest 3 + Testing Library + Playwright
+
+## Requirements
+
+- Node.js 20 or later
+- npm 10 or later
+
+## Getting Started
+
+### One-click startup on Windows
+
+Double-click `启动磁力片网站.cmd`. The script checks port 5174, installs missing dependencies, starts the development server, and opens the browser. Run `停止磁力片网站.cmd` to stop it.
+
+### Development commands
 
 ```bash
+# Install dependencies
 npm install
-npm run dev
+
+# Start the website on port 5174
+npm run start-site
+
+# Run unit tests in watch mode
+npm test
+
+# Run unit tests once
+npm run test:run
+
+# Run Playwright E2E tests
+npm run test:e2e
+
+# Type-check and create a production build
+npm run build
 ```
 
 Open <http://localhost:5174/>. See [CONTRIBUTING.md](CONTRIBUTING.md) for the complete development and pull-request workflow.
+
+## Deployment
+
+The application uses `BrowserRouter`, so static hosting must provide an **SPA fallback** to `index.html`.
+
+### Vercel
+
+1. Push the repository to GitHub.
+2. Import it into Vercel.
+3. The included `vercel.json` supplies the required rewrite rule.
+
+### Netlify
+
+1. Push the repository to GitHub.
+2. Import it into Netlify.
+3. The included `netlify.toml` supplies the required redirect rule.
+
+### Nginx
+
+```nginx
+location / {
+  try_files $uri $uri/ /index.html;
+}
+```
+
+## Project Structure
+
+```text
+src/
+├── components/          # Shared UI and 3D scene components
+│   ├── DesktopSiteShell.tsx  # Desktop navigation, breadcrumbs, and footer
+│   ├── Header.tsx       # Page header
+│   ├── ModelCard.tsx    # Model card
+│   ├── MagnetScene.tsx  # 3D magnetic-tile scene
+│   └── ErrorBoundary.tsx # Error boundary
+├── data/                # Data layer
+│   ├── types.ts         # TypeScript data types
+│   ├── models.ts        # Model catalog
+│   └── v2/              # v2 engine model definitions
+├── engine/              # Geometry and connection engine
+│   ├── shapes.ts        # Shape definitions
+│   ├── solver.ts        # Connection solver
+│   ├── validator.ts     # Physical validator
+│   └── types.ts         # Engine types
+├── pages/               # Route-level pages
+│   ├── HomePage.tsx
+│   ├── ModelListPage.tsx
+│   ├── ModelDetailPage.tsx
+│   ├── TutorialPage.tsx
+│   └── NotFoundPage.tsx
+├── test/                # Unit, integration, and E2E tests
+│   ├── e2e/             # Playwright tests and visual snapshots
+│   ├── models.test.ts
+│   ├── geometry.inset.test.ts
+│   └── engine.validator.test.ts
+├── utils/               # Color and geometry helpers
+├── App.tsx              # Application router
+├── main.tsx             # Browser entry point
+└── index.css            # Global styles
+```
+
+## Model Catalog
+
+The project currently includes seven models across house, vehicle, rocket, animal, and castle themes.
+
+| Model | ID | Theme | Difficulty | Age | Pieces | Steps | Structure |
+|---|---|---|---|---|---:|---:|---|
+| Cozy House | `house-1` | House | Medium | 4–6 | 12 | 3 | 3D |
+| Race Car | `car-1` | Car | Easy | 3–5 | 5 | 4 | Flat |
+| Rocket | `rocket-1` | Rocket | Medium | 4–6 | 6 | 4 | Flat |
+| Cat | `cat-1` | Animal | Easy | 3–5 | 7 | 4 | Flat |
+| Rainbow Castle | `castle-1` | Castle | Hard | 6–12 | 20 | 5 | 3D |
+| Penguin | `penguin-1` | Animal | Easy | 3–4 | 8 | 4 | Flat |
+| Dream 3D House | `flagship-house-1` | House | Hard | 5–10 | 29 | 9 | 3D |
+
+Supported shapes: square, rectangle, equilateral triangle, isosceles triangle, right triangle, elongated right triangle, trapezoid, rhombus, pentagon, hexagon, sector, and semicircle.
+
+## Features
+
+### Home
+
+- Featured models, theme browsing, and difficulty selection
+- Popular-model grid on desktop and horizontal scrolling on mobile
+- Direct entry points to the editor and learning center
+- Parent-child play tips
+
+### Model catalog and details
+
+- Search and filters for theme, difficulty, age, and structure type
+- Shareable URL-based filter state
+- Interactive 3D preview, parts list, learning goals, and parent guidance
+- Construction-step preview and a direct start-building action
+
+### Step-by-step tutorials
+
+- Interactive 3D construction scene with newly added pieces highlighted
+- Clickable step timeline, parts list, instructions, and parent prompts
+- Desktop split layout and mobile vertical layout
+- Camera reset controls
+
+### Learning center
+
+- Shape reference
+- Connection tutorials
+- Basic structure exercises
+- Safety and maintenance guidance
+
+### 3D editor and engine
+
+- Desktop model-authoring workspace
+- Geometry, connection, serialization, and solver modules
+- Physical, semantic, inventory, and step-coverage validation
+- Unit, integration, route, visual-regression, and Playwright E2E tests
+
+## Responsive Design
+
+- **Desktop:** content up to 1440 px wide, shared top navigation and footer, and the complete editor workspace
+- **Mobile:** optimized for a 390 px viewport with fixed bottom navigation
+- **Tablet:** adaptive layout optimized around a 768 px viewport
+
+The learning website is responsive across devices. The professional editor is intentionally optimized for desktop use.
+
+## Roadmap
+
+- [x] Local favorites
+- [x] Saved building progress with `localStorage`
+- [x] Magnetic-tile learning center
+- [x] Desktop design system
+- [ ] Voice guidance
+- [ ] Video tutorial support
+- [ ] User-uploaded models
+- [ ] Social sharing
+- [ ] Real magnetic-tile image assets
+- [ ] Multilingual application UI
+- [ ] Building timer
+- [ ] Achievement system
+
+## Contributing and License
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening an issue or pull request. The project is released under the [MIT License](LICENSE).
 
 <a id="中文说明"></a>
 
@@ -199,6 +379,12 @@ src/
 - 基础结构练习
 - 安全与维护
 
+### 3D 编辑器与引擎
+- 电脑端专业模型编辑工作台
+- 几何、连接、序列化与求解器模块
+- 物理、语义、材料清单与步骤覆盖校验
+- 单元、集成、路由、视觉回归与 Playwright E2E 测试
+
 ## 适配说明
 
 网站采用响应式设计：
@@ -222,3 +408,7 @@ src/
 - [ ] 添加多语言支持
 - [ ] 添加搭建计时功能
 - [ ] 添加成就系统
+
+## 参与贡献与许可证
+
+提交 Issue 或 Pull Request 前请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。本项目采用 [MIT License](LICENSE) 开源许可证。
