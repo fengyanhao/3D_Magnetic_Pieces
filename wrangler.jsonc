@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "server",
+  "compatibility_date": "2026-05-22",
+  "main": "./server/index.ts",
+  "assets": {
+    "not_found_handling": "single-page-application"
+  }
+}

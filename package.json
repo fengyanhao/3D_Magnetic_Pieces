@@ -6,7 +6,7 @@
   "scripts": {
     "start-site": "vite --host 0.0.0.0 --port 5174 --strictPort",
     "dev": "vite --host 0.0.0.0 --port 5174 --strictPort",
-    "build": "tsc && vite build && node scripts/prepare-sites-dist.mjs",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest",
     "test:run": "vitest run",
@@ -25,6 +25,7 @@
     "three": "^0.185.1"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.37.1",
     "@openai/sites-vite-plugin": "^0.2.0",
     "@playwright/test": "^1.61.1",
     "@testing-library/dom": "^10.4.1",
@@ -43,6 +44,7 @@
     "typescript": "^5.3.3",
     "vite": "^8.0.0",
     "vite-plugin-singlefile": "^2.3.3",
-    "vitest": "^3.0.7"
+    "vitest": "^3.0.7",
+    "wrangler": "^4.92.0"
   }
 }
